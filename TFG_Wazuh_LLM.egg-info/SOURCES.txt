@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+TFG_Wazuh_LLM.egg-info/PKG-INFO
+TFG_Wazuh_LLM.egg-info/SOURCES.txt
+TFG_Wazuh_LLM.egg-info/dependency_links.txt
+TFG_Wazuh_LLM.egg-info/entry_points.txt
+TFG_Wazuh_LLM.egg-info/requires.txt
+TFG_Wazuh_LLM.egg-info/top_level.txt
+wazuh_llm/__init__.py
+wazuh_llm/middleware.py

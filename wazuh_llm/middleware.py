@@ -143,8 +143,7 @@ def analizar_con_ia_mitre(alerta):
 # BLOQUE DE EJECUCIÓN PRINCIPAL
 # =====================================================================
 
-# Este bloque solo se ejecuta si el script se llama directamente (no si se importa desde otro archivo)
-if __name__ == "__main__":
+def main():
     print(f"Iniciando Middleware TFG - Fase de Correlación MITRE")
     
     # Paso 1: Recuperar telemetría
@@ -156,4 +155,11 @@ if __name__ == "__main__":
         
         # Paso 3: Renderizado de la salida
         print("\n" + "="*60) 
-        print
+        print("ANÁLISIS DE SEGURIDAD ENRIQUECIDO (MITRE ATT&CK)")
+        print("="*60)
+        print(analisis) 
+    else:
+        print("[-] No se han encontrado alertas relevantes en el Indexer en este momento.")
+
+if __name__ == "__main__":
+    main()

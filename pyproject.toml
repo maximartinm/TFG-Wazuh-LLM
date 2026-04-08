@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "TFG-Wazuh-LLM"
+version = "1.0.0"
+authors = [
+  { name="Máximo Martín Moreno", email="martinmorenomaximo@gmail.com" },
+]
+description = "Middleware para enriquecer alertas de Wazuh usando LLMs locales (Ollama)."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Security",
+]
+dependencies = [
+    "requests",
+    "urllib3",
+]
+
+[project.scripts]
+wazuh-ia = "wazuh_llm.middleware:main"
