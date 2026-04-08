@@ -1,4 +1,4 @@
-# TFG-Wazuh-LLM 🛡️🧠
+# TFG-Wazuh-LLM
 
 ![Python Version](https://img.shields.io/badge/python-%3E%3D3.8-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -8,7 +8,7 @@
 
 Este proyecto es parte de un Trabajo de Fin de Grado (TFG) de Ingeniería. Su objetivo principal es actuar como un orquestador entre un despliegue de **Wazuh (SIEM/XDR)** y un **Modelo de Lenguaje Extenso (LLM)** ejecutado de forma local, mejorando la capacidad de los analistas de seguridad (SOC) para investigar y responder a incidentes.
 
-## 🚀 Características Principales
+## Características Principales
 
 - **Conexión Directa:** Extrae alertas en tiempo real desde el Wazuh Indexer (OpenSearch) vía API REST.
 - **Enriquecimiento Semántico:** Transforma el JSON técnico de las alertas en informes de incidentes comprensibles.
@@ -16,7 +16,7 @@ Este proyecto es parte de un Trabajo de Fin de Grado (TFG) de Ingeniería. Su ob
 - **Privacidad Total:** Utiliza **Ollama** (ej. Llama 3.2) para ejecutar la IA en hardware local, asegurando que los datos sensibles de la infraestructura no se envíen a servidores de terceros.
 - **CLI Nativa:** Ejecutable directamente desde la terminal mediante el comando `wazuh-ia`.
 
-## 📋 Requisitos Previos
+## Requisitos Previos
 
 Para ejecutar este middleware, necesitas tener instalado y configurado:
 
@@ -51,8 +51,6 @@ El proyecto está empaquetado utilizando estándares modernos de Python (`pyproj
 
 Una vez instalado, el paquete expone un comando global en tu terminal. Ya no necesitas llamar a Python directamente.
 
-Simplemente ejecuta:  
-
-```wazuh-ia```
+Simplemente ejecuta:   ```wazuh-ia```
 
 El script conectará con el Indexer de Wazuh, buscará la alerta crítica más reciente y generará el análisis táctico a través del LLM.
