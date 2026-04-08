@@ -1,2 +1,0 @@
-[console_scripts]
-wazuh-ia = wazuh_llm.middleware:main
