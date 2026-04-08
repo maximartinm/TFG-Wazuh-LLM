@@ -11,16 +11,20 @@ authors = [
 description = "Middleware para enriquecer alertas de Wazuh usando LLMs locales (Ollama)."
 readme = "README.md"
 requires-python = ">=3.8"
+license = { text = "MIT" }
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Security",
 ]
 dependencies = [
-    "requests",
-    "urllib3",
+    "requests >= 2.32",
+    "urllib3 >= 2.6",
+    "python-dotenv >= 1.2"
 ]
 
 [project.scripts]
 wazuh-ia = "wazuh_llm.middleware:main"
+
+[tool.setuptools]
+packages = ["wazuh_llm"]

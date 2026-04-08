@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import requests
 import json
 import urllib3
@@ -8,48 +7,25 @@ import urllib3
 # desactivamos los avisos de InsecureRequestWarning.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# =====================================================================
+# CONFIGURACIÓN DEL ENTORNO Y COMUNICACIONES
+# =====================================================================
+
+# Configuración del Indexer de Wazuh (Motor OpenSearch subyacente)
+# Apuntamos al puerto 9200 en lugar de la API (55000) para acceder directamente a la BBDD.
+INDEXER_URL = "https://localhost:9200/wazuh-alerts-*/_search"
+INDEXER_USER = "admin"
+INDEXER_PASS = "SecretPassword" # Contraseña por defecto del entorno Docker
+
+# Configuración del LLM Local (Ollama)
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODELO = "llama3.2" # Elegimos la versión 3B para no saturar la memoria unificada del Mac
 
 # =====================================================================
 # FUNCIONES PRINCIPALES
 # =====================================================================
 
-def load_conf():
-    """
-    Carga la configuración del entorno desde el archivo .env.
-    Esto permite separar la configuración del código y facilitar cambios futuros.
-    
-    Returns:
-        dict: Un diccionario con las variables de configuración necesarias.
-    """
-    conf = {}
-    try:
-        with open(".env", "r") as f:
-            for line in f:
-                if line.strip() and not line.startswith("#"):
-                    key, value = line.strip().split("=", 1)
-                    conf[key.strip()] = value.strip()
-        return conf
-    except Exception as e:
-        print(f"[-] Error al cargar la configuración: {e}")
-        return None
-
-
-def obtener_token_wazuh(config):
-    """Obtiene el token JWT necesario para hablar con la API de Wazuh"""
-    try:
-        response = requests.get(
-            f"{config.get('WZ_API_URL')}/security/user/authenticate?raw=true",
-            auth=(config.get('WZ_API_USER'), config.get('WZ_API_PASS')),
-            verify=False
-        )
-        if response.status_code == 200:
-            return response.json().get('data', {}).get('token')
-        return None
-    except Exception as e:
-        print(f"Error de conexión con la API de Wazuh: {e}")
-        return None
-
-def obtener_alerta_del_indexer(config):
+def obtener_alerta_del_indexer():
     """
     Realiza una consulta DSL (Domain Specific Language) a OpenSearch para extraer 
     la última alerta de seguridad crítica registrada por Wazuh.
@@ -71,8 +47,8 @@ def obtener_alerta_del_indexer(config):
     try:
         # Petición HTTP POST al Indexer
         response = requests.post(
-            config.get('WZ_API_URL'), 
-            auth=(config.get('WZ_API_USER'), config.get('WZ_API_PASS')), 
+            INDEXER_URL, 
+            auth=(INDEXER_USER, INDEXER_PASS), 
             json=query, 
             verify=False, # Imprescindible al usar certificados auto-firmados
             timeout=10    # Límite de espera de 10 segundos para no bloquear el hilo principal
@@ -168,10 +144,6 @@ def analizar_con_ia_mitre(alerta):
 # =====================================================================
 
 def main():
-    conf = load_conf()
-    token =obtener_token_wazuh(conf)
-    print(f"Token JWT obtenido: {token[:20]}...") if token else print("No se pudo obtener el token JWT.")
-    exit(0) 
     print(f"Iniciando Middleware TFG - Fase de Correlación MITRE")
     
     # Paso 1: Recuperar telemetría
