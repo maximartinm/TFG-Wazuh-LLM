@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "TFG-Wazuh-LLM"
 version = "1.0.0"
 authors = [
-  { name="Máximo Martín Moreno", email="martinmorenomaximo@gmail.com" },
+  { name="Maximo Martin Moreno", email="martinmorenomaximo@gmail.com" },
 ]
 description = "Middleware para enriquecer alertas de Wazuh usando LLMs locales (Ollama)."
 readme = "README.md"
