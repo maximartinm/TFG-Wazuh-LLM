@@ -54,3 +54,4 @@ Una vez instalado, el paquete expone un comando global en tu terminal. Ya no nec
 Simplemente ejecuta:   ```wazuh-ia```
 
 El script conectará con el Indexer de Wazuh, buscará la alerta crítica más reciente y generará el análisis táctico a través del LLM.
+
