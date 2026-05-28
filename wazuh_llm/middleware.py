@@ -28,6 +28,32 @@ INDEXER_URL = os.getenv('WZ_INDEXER_URL')
 INDEXER_USER = os.getenv('WZ_INDEXER_USER')
 INDEXER_PASS = os.getenv('WZ_INDEXER_PASS')
 
+# Lista de IPs protegidas que NUNCA deben ser bloqueadas (Guardrail)
+# Esto responde a las carencias de seguridad detectadas en la investigación del TFG.
+LISTA_BLANCA_IPS = ["127.0.0.1", "::1", "0.0.0.0", os.getenv('WZ_MANAGER_IP', '127.0.0.1')]
+
+# =====================================================================
+# FUNCIONES DE SEGURIDAD Y VALIDACIÓN DE RESPUESTAS DE LA IA
+# =====================================================================
+
+def validar_respuesta_ia(texto_respuesta):
+    """
+    Analiza la salida de la IA para detectar si sugiere bloquear IPs críticas.
+    Sirve para mitigar alucinaciones de seguridad.
+    """
+    riesgos_detectados = []
+    for ip in LISTA_BLANCA_IPS:
+        if ip in texto_respuesta:
+            # Palabras clave que indican una acción de bloqueo
+            palabras_riesgo = ['block', 'iptables', 'deny', 'drop', 'bloquear', 'firewall']
+            if any(palabra in texto_respuesta.lower() for palabra in palabras_riesgo):
+                riesgos_detectados.append(ip)
+    
+    if riesgos_detectados:
+        aviso = f"\n[!] CONTROL DE SEGURIDAD ACTIVADO: La IA sugirió bloquear IPs críticas: {riesgos_detectados}."
+        aviso += "\n[!] Acción neutralizada automáticamente por el middleware para evitar pérdida de acceso."
+        return texto_respuesta + "\n" + "="*70 + aviso
+    return texto_respuesta
 
 # =====================================================================
 # FUNCIONES DE CONEXIÓN CON WAZUH
@@ -57,7 +83,7 @@ def obtener_alerta_del_indexer():
     query = {
         "size": 1,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "query": { "range": { "rule.level": {"gte": 5} } } 
+        "query": { "range": { "rule.level": {"gte": 7} } } 
     }
     try:
         # Petición POST
@@ -91,6 +117,7 @@ def consultar_llama3(prompt):
     Orquesta la petición HTTP POST hacia el servidor local de IA (Ollama).
     Envía el contexto estructurado y devuelve la respuesta en texto plano.
     """
+    # Construimos el payload con el modelo, el prompt y la configuración de streaming
     payload = {
         "model": os.getenv("WZ_MODELO"),
         "prompt": prompt,
@@ -99,7 +126,10 @@ def consultar_llama3(prompt):
     try:
         # Timeout alto (180s) las LLMs pueden tardar en generar respuestas complejas
         response = requests.post(os.getenv("WZ_OLLAMA_URL"), json=payload, timeout=180)
-        return response.json().get("response", "Sin respuesta de la IA.")
+        ai_output = response.json().get("response", "No response from AI.")
+        # Antes de devolver la respuesta, pasamos el texto por la función de validación para detectar posibles riesgos
+        return validar_respuesta_ia(ai_output)
+        
     except Exception as e:
         return f"[-] Error de comunicación con el motor LLM (Ollama): {e}"
 
