@@ -66,6 +66,38 @@ Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"b
 Ahora convierte esta pregunta:
 {consulta_usuario}"""
 
+def reparar_json_truncado(texto: str) -> str:
+    """
+    Los LLMs locales a veces truncan el JSON dejando llaves o corchetes
+    sin cerrar. Esta función cuenta los abiertos y añade los cierres
+    que faltan al final, en orden inverso.
+    """
+    cierres = []
+    dentro_de_string = False
+    escape = False
+
+    for char in texto:
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"' and not escape:
+            dentro_de_string = not dentro_de_string
+            continue
+        if dentro_de_string:
+            continue
+        if char == '{':
+            cierres.append('}')
+        elif char == '[':
+            cierres.append(']')
+        elif char in ('}', ']'):
+            if cierres and cierres[-1] == char:
+                cierres.pop()
+
+    # Añadir los cierres que faltan en orden inverso
+    return texto + ''.join(reversed(cierres))
 
 def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
     """
@@ -86,8 +118,12 @@ def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
         response = requests.post(ollama_url, json=payload, timeout=60)
         raw = response.json().get("response", "").strip()
 
-        # Limpiar posibles bloques markdown que el modelo incluya a veces
+        # Limpiar bloques markdown que el modelo incluye a veces
         raw = raw.replace("```json", "").replace("```", "").strip()
+
+        # Reparar JSON truncado: contar llaves y corchetes sin cerrar
+        # y añadir los cierres que faltan al final
+        raw = reparar_json_truncado(raw)
 
         query_dsl = json.loads(raw)
         return query_dsl
@@ -98,6 +134,7 @@ def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
     except Exception as e:
         print(f"[-] Error traduciendo consulta: {e}")
         return None
+
 
 
 # =====================================================================
