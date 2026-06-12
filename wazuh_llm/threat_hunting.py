@@ -79,7 +79,7 @@ def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
     Returns:
         Dict con la query DSL, o None si la traducción falla.
     """
-    prompt = PROMPT_NL_A_DSL.format(consulta_usuario=consulta)
+    prompt = PROMPT_NL_A_DSL.replace("{consulta_usuario}", consulta)
 
     try:
         payload = {"model": modelo, "prompt": prompt, "stream": False}
