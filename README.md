@@ -29,7 +29,7 @@ Este middleware convierte esa alerta en un informe estructurado con contexto MIT
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Zona 1: Endpoints Monitorizados                            │
-│  Ubuntu VM (SSH/Sudo)   ·   Windows VM (Mimikatz)           │
+│  Ubuntu VM (SSH / Sudo / Escalada de privilegios)           │
 └──────────────────┬──────────────────────────────────────────┘
                    │ Logs (Puerto 1514)
 ┌──────────────────▼──────────────────────────────────────────┐
@@ -219,17 +219,15 @@ sudo systemctl enable --now wazuh-agent
 | Fuerza bruta SSH (usuario inexistente) | 5710 | T1110.001 | Ubuntu |
 | Contraseña SSH incorrecta | 5503 | T1110 | Ubuntu |
 | Escalada de privilegios (sudo) | 5404 | T1548.003 | Ubuntu |
-| Credenciales volcadas (Mimikatz) | — | T1003 | Windows (pendiente) |
 
 ---
 
 ## Estado del desarrollo
 
-- [x] Fase 1: Transformación de alertas (enriquecimiento semántico)
-- [x] Fase 2: Correlación con MITRE ATT&CK y Kill Chain
-- [ ] Fase 3a: Respuesta Activa con confirmación humana
-- [ ] Fase 3b: Threat Hunting en lenguaje natural
-- [ ] Validación con agente Windows y Mimikatz
+- [x] Fase 1: Transformación de alertas en informes legibles
+- [x] Fase 2: Correlación con MITRE ATT&CK e inferencia de Kill Chain
+- [x] Fase 3a: Respuesta Activa con confirmación human-in-the-loop
+- [x] Fase 3b: Threat Hunting mediante consultas en lenguaje natural
 
 ---
 
