@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
+"""
+Middleware principal del TFG: Wazuh + LLM
+Orquestador que conecta el ecosistema Wazuh con un LLM local (Ollama)
+para enriquecer alertas de seguridad con análisis MITRE ATT&CK.
+"""
 import os
+import sys
+import argparse
 import requests
 import urllib3
 from dotenv import load_dotenv
@@ -8,85 +15,116 @@ from dotenv import load_dotenv
 # CONFIGURACIÓN INICIAL
 # =====================================================================
 
-# Wazuh utiliza certificados SSL auto-firmados. Desactivamos las advertencias 
-# de urllib3 para evitar que la consola se llene de mensajes de error de seguridad.
+# Wazuh usa certificados SSL auto-firmados. Desactivamos las advertencias
+# de urllib3 para no contaminar la salida de consola.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Cargamos las variables de entorno desde el archivo .env
 load_dotenv()
 
-# ---  1: API DE GESTIÓN (Plano de Control - Puerto 55000) ---
-# Se utiliza para acciones de gestión, como obtener tokens o (en el futuro) lanzar bloqueos.
-API_URL = os.getenv('WZ_API_URL')
-API_USER = os.getenv('WZ_API_USER')
-API_PASS = os.getenv('WZ_API_PASS')
+# --- Plano de Gestión (API Manager - Puerto 55000) ---
+API_URL   = os.getenv('WZ_API_URL')
+API_USER  = os.getenv('WZ_API_USER')
+API_PASS  = os.getenv('WZ_API_PASS')
 
-# ---  2: INDEXER (Plano de Datos - Puerto 9200) ---
-# Se utiliza exclusivamente para obtener datos. Es la base de datos
-# donde OpenSearch almacena el histórico de alertas forenses.
-INDEXER_URL = os.getenv('WZ_INDEXER_URL')
+# --- Plano de Datos (Indexer / OpenSearch - Puerto 9200) ---
+INDEXER_URL  = os.getenv('WZ_INDEXER_URL')
 INDEXER_USER = os.getenv('WZ_INDEXER_USER')
 INDEXER_PASS = os.getenv('WZ_INDEXER_PASS')
 
-# Lista de IPs protegidas que NUNCA deben ser bloqueadas (Guardrail)
-# Esto responde a las carencias de seguridad detectadas en la investigación del TFG.
-LISTA_BLANCA_IPS = ["127.0.0.1", "::1", "0.0.0.0", os.getenv('WZ_MANAGER_IP', '127.0.0.1')]
+# IPs protegidas: el guardrail NUNCA las dejará bloquear
+LISTA_BLANCA_IPS = [
+    "127.0.0.1", "::1", "0.0.0.0",
+    os.getenv('WZ_MANAGER_IP', '127.0.0.1')
+]
+
 
 # =====================================================================
-# FUNCIONES DE SEGURIDAD Y VALIDACIÓN DE RESPUESTAS DE LA IA
+# GUARDRAIL DE SEGURIDAD
 # =====================================================================
 
-def validar_respuesta_ia(texto_respuesta):
+def validar_respuesta_ia(texto_respuesta: str) -> str:
     """
-    Analiza la salida de la IA para detectar si sugiere bloquear IPs críticas.
-    Sirve para mitigar alucinaciones de seguridad.
+    FIX respecto a versión anterior:
+    El falso positivo ocurría porque se buscaba la IP en TODO el texto,
+    incluyendo el full_log que el propio prompt inyecta. Ahora solo
+    analizamos la sección de 'PLAN DE RESPUESTA ACTIVA' del informe,
+    que es donde la IA propone comandos.
     """
-    riesgos_detectados = []
+    # Intentamos aislar solo la sección de respuesta activa
+    seccion_respuesta = texto_respuesta
+    marcadores = ["PLAN DE RESPUESTA", "RESPUESTA ACTIVA", "TRIAGE", "iptables", "firewall-cmd"]
+    for marcador in marcadores:
+        idx = texto_respuesta.upper().find(marcador.upper())
+        if idx != -1:
+            seccion_respuesta = texto_respuesta[idx:]
+            break
+
+    riesgos = []
+    palabras_bloqueo = ['iptables', 'firewall-cmd', 'ufw deny', 'ufw block', 'bloquear', '-j DROP', '-j REJECT']
     for ip in LISTA_BLANCA_IPS:
-        if ip in texto_respuesta:
-            # Palabras clave que indican una acción de bloqueo
-            palabras_riesgo = ['block', 'iptables', 'deny', 'drop', 'bloquear', 'firewall']
-            if any(palabra in texto_respuesta.lower() for palabra in palabras_riesgo):
-                riesgos_detectados.append(ip)
-    
-    if riesgos_detectados:
-        aviso = f"\n[!] CONTROL DE SEGURIDAD ACTIVADO: La IA sugirió bloquear IPs críticas: {riesgos_detectados}."
-        aviso += "\n[!] Acción neutralizada automáticamente por el middleware para evitar pérdida de acceso."
-        return texto_respuesta + "\n" + "="*70 + aviso
+        if ip in seccion_respuesta:
+            if any(cmd in seccion_respuesta.lower() for cmd in palabras_bloqueo):
+                riesgos.append(ip)
+
+    if riesgos:
+        aviso = (
+            f"\n{'='*70}\n"
+            f"[!] GUARDRAIL ACTIVADO: La IA sugirió bloquear IPs protegidas: {riesgos}\n"
+            f"[!] Esas sugerencias han sido marcadas como INVÁLIDAS. No ejecutar.\n"
+            f"{'='*70}"
+        )
+        return texto_respuesta + aviso
+
     return texto_respuesta
 
+
 # =====================================================================
-# FUNCIONES DE CONEXIÓN CON WAZUH
+# CONEXIÓN CON WAZUH — PLANO DE GESTIÓN
 # =====================================================================
 
-def obtener_token():
+def obtener_token() -> str | None:
     """
-    Autenticación en la API RESTful de Wazuh.
-    Genera un Token válido para futuras peticiones autorizadas.
+    Autenticación JWT en la API de Wazuh (puerto 55000).
+    Devuelve el token o None si falla.
     """
     url = f"{API_URL}/security/user/authenticate"
     try:
-        # Petición GET. Verify=False es necesario por los certificados auto-firmados de Docker.
         r = requests.get(url, auth=(API_USER, API_PASS), verify=False, timeout=10)
-        # Extraemos el string del token de la estructura JSON de respuesta.
-        return r.json().get('data', {}).get('token') if r.status_code == 200 else None
+        if r.status_code == 200:
+            return r.json().get('data', {}).get('token')
+        print(f"[!] Login fallido en API de Gestión. Status: {r.status_code}")
+        return None
+    except requests.exceptions.ConnectionError:
+        print(f"[-] No se puede conectar a la API de Gestión ({API_URL}). ¿Está Wazuh levantado?")
+        return None
     except Exception as e:
-        print(f"[-] Error crítico de login en la API: {e}")
+        print(f"[-] Error inesperado en login: {e}")
         return None
 
-def obtener_alerta_del_indexer():
+
+# =====================================================================
+# CONEXIÓN CON WAZUH — PLANO DE DATOS
+# =====================================================================
+
+def obtener_alertas_del_indexer(n_alertas: int = 5, nivel_minimo: int = 5) -> list:
     """
-    Realiza una consulta DSL directa a OpenSearch.
-    Extrae la última alerta registrada con nivel >= 5.
+    FIX respecto a versión anterior:
+    Ahora devuelve una LISTA de N alertas en lugar de solo 1.
+    Esto permite analizar múltiples eventos en una sola ejecución.
+
+    Args:
+        n_alertas:     Cuántas alertas recuperar (por defecto 5).
+        nivel_minimo:  Nivel de severidad mínimo de Wazuh (por defecto 5).
+
+    Returns:
+        Lista de dicts con los datos de cada alerta (_source de OpenSearch).
     """
-    # Consulta optimizada: 1 resultado, orden descendente, nivel >= 5
     query = {
-        "size": 1,
+        "size": n_alertas,
         "sort": [{"timestamp": {"order": "desc"}}],
-        "query": { "range": { "rule.level": {"gte": 7} } } 
+        "query": {"range": {"rule.level": {"gte": nivel_minimo}}}
     }
     try:
-        # Petición POST
         response = requests.post(
             INDEXER_URL,
             auth=(INDEXER_USER, INDEXER_PASS),
@@ -95,132 +133,218 @@ def obtener_alerta_del_indexer():
             timeout=10
         )
         if response.status_code == 200:
-            # El Indexer devuelve los datos en un árbol jerárquico. 
-            # Accedemos al segundo nivel de 'hits' para obtener el array de documentos encontrados.
-            data = response.json().get('hits', {}).get('hits', [])
-            
-            # Extraemos el campo '_source', que contiene el cuerpo de la alerta de Wazuh,
-            # garantizando que existan resultados antes de intentar acceder al índice 0.
-            return data[0]['_source'] if data else None
-        return None
+            hits = response.json().get('hits', {}).get('hits', [])
+            return [h['_source'] for h in hits]
+
+        print(f"[!] Error al consultar el Indexer. Status: {response.status_code}")
+        return []
+
+    except requests.exceptions.ConnectionError:
+        print(f"[-] No se puede conectar al Indexer ({INDEXER_URL}). ¿Está Wazuh levantado?")
+        return []
     except Exception as e:
-        print(f"[!] Error de conexión consultando el Indexer: {e}")
-        return None
+        print(f"[!] Error inesperado consultando el Indexer: {e}")
+        return []
 
 
 # =====================================================================
-# FUNCIONES DE INTELIGENCIA ARTIFICIAL
+# MOTOR DE INTELIGENCIA ARTIFICIAL
 # =====================================================================
 
-def consultar_llama3(prompt):
+def consultar_ollama(prompt: str) -> str:
     """
-    Orquesta la petición HTTP POST hacia el servidor local de IA (Ollama).
-    Envía el contexto estructurado y devuelve la respuesta en texto plano.
+    Envía el prompt al servidor Ollama local y devuelve la respuesta.
+    Timeout de 180s porque los LLMs locales pueden ser lentos.
     """
-    # Construimos el payload con el modelo, el prompt y la configuración de streaming
     payload = {
-        "model": os.getenv("WZ_MODELO"),
+        "model": os.getenv("WZ_MODELO", "llama3.2"),
         "prompt": prompt,
-        "stream": False # False obliga a esperar a que la IA genere toda la respuesta antes de devolverla.
+        "stream": False
     }
     try:
-        # Timeout alto (180s) las LLMs pueden tardar en generar respuestas complejas
         response = requests.post(os.getenv("WZ_OLLAMA_URL"), json=payload, timeout=180)
-        ai_output = response.json().get("response", "No response from AI.")
-        # Antes de devolver la respuesta, pasamos el texto por la función de validación para detectar posibles riesgos
+        ai_output = response.json().get("response", "[Sin respuesta del modelo]")
         return validar_respuesta_ia(ai_output)
-        
+    except requests.exceptions.Timeout:
+        return "[-] Timeout: el modelo tardó más de 180s. Prueba con un modelo más ligero."
+    except requests.exceptions.ConnectionError:
+        return f"[-] No se puede conectar a Ollama ({os.getenv('WZ_OLLAMA_URL')}). ¿Está el servicio activo?"
     except Exception as e:
-        return f"[-] Error de comunicación con el motor LLM (Ollama): {e}"
+        return f"[-] Error inesperado comunicándose con Ollama: {e}"
 
-def analizar_con_ia_mitre(alerta):
+
+def construir_prompt_mitre(alerta: dict) -> str:
     """
-    Motor de Prompt Engineering.
-    Extrae telemetría cruda de Wazuh, la sanea y la inyecta en una plantilla (Template)
-    para dotar de contexto forense a la IA.
+    Extrae los campos relevantes de la alerta Wazuh e inyecta los valores
+    en la plantilla mitre_prompt.txt.
     """
-    # 1. Extracción segura de metadatos básicos, get() evita errores si un campo no existe
-    descripcion = alerta.get("rule", {}).get("description", "Desconocida")
-    nivel = alerta.get("rule", {}).get("level", 0)
-    agente = alerta.get("agent", {}).get("name", "Desconocido")
-    rule_id = alerta.get("rule", {}).get("id", "N/A")
+    # Metadatos básicos
+    rule        = alerta.get("rule", {})
+    descripcion = rule.get("description", "Desconocida")
+    nivel       = rule.get("level", 0)
+    rule_id     = rule.get("id", "N/A")
+    agente      = alerta.get("agent", {}).get("name", "Desconocido")
 
-    # 2. Extracción de Tácticas y Técnicas MITRE ATT&CK
-    mitre = alerta.get("rule", {}).get("mitre", {})
-    # Wazuh puede devolver listas o strings, por eso manejamos ambos casos con lógica condicional
-    m_id = ", ".join(mitre.get("id", ["N/A"])) if isinstance(mitre.get("id"), list) else mitre.get("id", "N/A")
-    m_tactic = ", ".join(mitre.get("tactic", ["N/A"])) if isinstance(mitre.get("tactic"), list) else mitre.get("tactic", "N/A")
+    # MITRE ATT&CK — Wazuh puede devolver string o lista
+    mitre    = rule.get("mitre", {})
+    m_id     = mitre.get("id", ["N/A"])
+    m_tactic = mitre.get("tactic", ["N/A"])
+    m_id     = ", ".join(m_id)     if isinstance(m_id, list)     else str(m_id)
+    m_tactic = ", ".join(m_tactic) if isinstance(m_tactic, list) else str(m_tactic)
 
-    # 3. Extracción de datos de red e identidades
-    data = alerta.get("data", {})
-    src_ip = data.get("srcip", "No registrada")
-    # Otros posibles campos de usuario
-    usuario = data.get("srcuser", data.get("dstuser", data.get("user", "No registrado")))
+    # Red e identidades
+    data     = alerta.get("data", {})
+    src_ip   = data.get("srcip", "No registrada")
+    usuario  = data.get("srcuser", data.get("dstuser", data.get("user", "No registrado")))
 
-    # 4. Extracción del log completo para análisis forense detallado
+    # Log forense crudo
     full_log = alerta.get("full_log", "No disponible")
 
-    # 5. Construcción del Prompt con plantilla externa
+    # Cargar plantilla externa
+    prompt_path = os.getenv("WZ_PROMPT_PATH", "prompts/mitre_prompt.txt")
     try:
-        # Leemos el template del prompt desde un archivo de texto
-        with open(os.getenv("WZ_PROMPT_PATH"), "r", encoding="utf-8") as f:
+        with open(prompt_path, "r", encoding="utf-8") as f:
             template = f.read()
-        
-        # Formateamos el string inyectando nuestras variables extraídas
-        prompt = template.format(
-            agente=agente,
-            nivel=nivel,
-            descripcion=descripcion,
-            rule_id=rule_id,
-            mitre_id=m_id,
-            mitre_tactic=m_tactic,
-            src_ip=src_ip,
-            usuario=usuario,
-            full_log=full_log
+
+        return template.format(
+            agente=agente, nivel=nivel, descripcion=descripcion,
+            rule_id=rule_id, mitre_id=m_id, mitre_tactic=m_tactic,
+            src_ip=src_ip, usuario=usuario, full_log=full_log
         )
-    except Exception as e:
-        print(f"[-] Error cargando el archivo prompt.txt: {e}. Usando prompt de emergencia por defecto.")
-        prompt = f"Analiza esta alerta de seguridad: {descripcion}. Log forense: {full_log}"
+    except FileNotFoundError:
+        print(f"[-] Archivo de prompt no encontrado: {prompt_path}. Usando prompt de emergencia.")
+        return (
+            f"Eres un analista SOC. Analiza esta alerta de Wazuh:\n"
+            f"Descripción: {descripcion}\nNivel: {nivel}\nAgente: {agente}\n"
+            f"MITRE: {m_tactic} ({m_id})\nLog: {full_log}\n"
+            f"Proporciona: resumen ejecutivo, análisis forense y 3 acciones de respuesta."
+        )
+
+
+def analizar_alerta(alerta: dict) -> str:
+    """
+    Pipeline completo para una alerta: extrae contexto → construye prompt → consulta LLM.
+    """
+    nivel   = alerta.get("rule", {}).get("level", 0)
+    agente  = alerta.get("agent", {}).get("name", "Desconocido")
+    rule_id = alerta.get("rule", {}).get("id", "N/A")
 
     print(f"\n[IA] Procesando evento de nivel {nivel} en agente '{agente}' (Regla ID: {rule_id})...")
-    
-    # 6. Llamada a la IA
-    return consultar_llama3(prompt)
+
+    prompt = construir_prompt_mitre(alerta)
+    return consultar_ollama(prompt)
 
 
 # =====================================================================
-# BLOQUE DE EJECUCIÓN PRINCIPAL (ORQUESTADOR)
+# MODO INTERACTIVO — BASE PARA FASE 3 (THREAT HUNTING)
 # =====================================================================
+
+def modo_consulta_interactiva(token: str | None):
+    """
+    Bucle interactivo donde el analista puede hacer preguntas en lenguaje natural.
+    El LLM interpreta la consulta y el middleware la traduce a una búsqueda en OpenSearch.
+    NOTA: Implementación básica — se amplía en threat_hunting.py (Semana 5-6).
+    """
+    print("\n" + "="*70)
+    print("MODO THREAT HUNTING — Consultas en Lenguaje Natural")
+    print("Escribe 'salir' para volver al menú principal.")
+    print("="*70)
+
+    while True:
+        consulta = input("\n[HUNTING] ¿Qué quieres investigar? > ").strip()
+        if consulta.lower() in ('salir', 'exit', 'quit'):
+            break
+        if not consulta:
+            continue
+
+        # Por ahora: enviamos la consulta directamente al LLM con contexto de Wazuh
+        # En Semana 5-6 esto se ampliará para generar queries DSL reales
+        prompt_hunting = (
+            f"Eres un analista SOC con acceso a Wazuh. El analista pregunta:\n"
+            f"'{consulta}'\n\n"
+            f"Basándote en técnicas MITRE ATT&CK y logs de seguridad típicos de Wazuh, "
+            f"explica qué buscarías, qué campos de OpenSearch consultarías "
+            f"(timestamp, rule.level, data.srcip, full_log, etc.) y qué indicadores "
+            f"de compromiso (IOCs) esperarías encontrar. Responde en español."
+        )
+        respuesta = consultar_ollama(prompt_hunting)
+        print(f"\n{respuesta}")
+
+
+# =====================================================================
+# PUNTO DE ENTRADA PRINCIPAL
+# =====================================================================
+
+def parsear_argumentos():
+    """Define los modos de ejecución disponibles via CLI."""
+    parser = argparse.ArgumentParser(
+        description="wazuh-ia: Middleware TFG para enriquecer alertas Wazuh con LLMs"
+    )
+    parser.add_argument(
+        '--alertas', type=int, default=1, metavar='N',
+        help='Número de alertas a analizar (por defecto: 1)'
+    )
+    parser.add_argument(
+        '--nivel', type=int, default=5, metavar='NIVEL',
+        help='Nivel mínimo de alerta a procesar (por defecto: 5)'
+    )
+    parser.add_argument(
+        '--hunting', action='store_true',
+        help='Activa el modo de consultas en lenguaje natural (Threat Hunting)'
+    )
+    parser.add_argument(
+        '--respuesta-activa', action='store_true',
+        help='Activa el módulo de Respuesta Activa (Fase 3, requiere confirmación humana)'
+    )
+    return parser.parse_args()
+
 
 def main():
-    print("--- Middleware TFG: Arquitectura SOC (Fase de Análisis Forense) ---")
+    args = parsear_argumentos()
 
-    # FASE 1: Comprobación de estado de la API
+    print("=" * 70)
+    print("  Middleware TFG — Wazuh + LLM  |  Arquitectura SOC")
+    print("=" * 70)
+
+    # --- Paso 1: Conectar a la API de Gestión ---
     token = obtener_token()
     if token:
-        print("[✓] Conectado a la API de Gestión (Puerto 55000) - Preparado para futuras acciones.")
+        print("[✓] API de Gestión (Puerto 55000): conectado.")
     else:
-        print("[!] Aviso: API de Gestión inaccesible. El sistema operará en modo de solo lectura.")
+        print("[!] API de Gestión inaccesible — modo solo lectura.")
 
-    # FASE 2: Obtención de la última alerta forense desde el Indexer
-    alerta = obtener_alerta_del_indexer()
+    # --- Paso 2: Modo Threat Hunting interactivo ---
+    if args.hunting:
+        modo_consulta_interactiva(token)
+        return
 
-    # FASE 3: Análisis de la alerta con IA y generación de informe táctico
-    if alerta:
-        print(f"[✓] Alerta forense capturada desde el Indexer (Puerto 9200).")
-        
-        # Invocamos la función de análisis con IA, que a su vez llama a la función de consulta a Ollama.
-        resultado = analizar_con_ia_mitre(alerta)
-        
-        # Mostramos el resultado en la consola con formato destacado
-        print("\n" + "="*70)
-        print("INFORME DE INTELIGENCIA TÁCTICA GENERADO POR LLM")
-        print("="*70)
+    # --- Paso 3: Obtener alertas del Indexer ---
+    print(f"[~] Buscando las {args.alertas} alertas más recientes con nivel >= {args.nivel}...")
+    alertas = obtener_alertas_del_indexer(n_alertas=args.alertas, nivel_minimo=args.nivel)
+
+    if not alertas:
+        print(f"[-] No se encontraron alertas de nivel >= {args.nivel}. Prueba con --nivel 3.")
+        sys.exit(0)
+
+    print(f"[✓] {len(alertas)} alerta(s) capturada(s) del Indexer (Puerto 9200).")
+
+    # --- Paso 4: Analizar cada alerta con el LLM ---
+    for i, alerta in enumerate(alertas, start=1):
+        print(f"\n{'='*70}")
+        print(f"  ALERTA {i}/{len(alertas)}  |  INFORME GENERADO POR LLM")
+        print(f"{'='*70}")
+
+        resultado = analizar_alerta(alerta)
         print(resultado)
-        print("="*70 + "\n")
-    else:
-        print("[-] El Indexer no reporta alertas recientes de nivel 5 o superior.")
 
-# Punto de entrada del script
+    print(f"\n{'='*70}")
+    print(f"[✓] Análisis completado. {len(alertas)} alerta(s) procesada(s).")
+
+    # --- Paso 5: Respuesta Activa (Fase 3) ---
+    if args.respuesta_activa:
+        print("\n[~] Módulo de Respuesta Activa: ver respuesta_activa.py")
+        # Se implementa en Semana 3-4
+
+
 if __name__ == "__main__":
     main()
