@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 # CONFIGURACIÓN INICIAL
 # =====================================================================
 
-# Wazuh usa certificados SSL auto-firmados. Desactivamos las advertencias
-# de urllib3 para no contaminar la salida de consola.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
@@ -44,13 +42,10 @@ LISTA_BLANCA_IPS = [
 
 def validar_respuesta_ia(texto_respuesta: str) -> str:
     """
-    FIX respecto a versión anterior:
-    El falso positivo ocurría porque se buscaba la IP en TODO el texto,
-    incluyendo el full_log que el propio prompt inyecta. Ahora solo
-    analizamos la sección de 'PLAN DE RESPUESTA ACTIVA' del informe,
-    que es donde la IA propone comandos.
+    Analiza solo la sección de respuesta activa del informe para detectar
+    si la IA sugiere bloquear IPs críticas. Evita falsos positivos causados
+    por IPs que aparecen en el full_log pero no en las recomendaciones.
     """
-    # Intentamos aislar solo la sección de respuesta activa
     seccion_respuesta = texto_respuesta
     marcadores = ["PLAN DE RESPUESTA", "RESPUESTA ACTIVA", "TRIAGE", "iptables", "firewall-cmd"]
     for marcador in marcadores:
@@ -108,16 +103,8 @@ def obtener_token() -> str | None:
 
 def obtener_alertas_del_indexer(n_alertas: int = 5, nivel_minimo: int = 5) -> list:
     """
-    FIX respecto a versión anterior:
-    Ahora devuelve una LISTA de N alertas en lugar de solo 1.
-    Esto permite analizar múltiples eventos en una sola ejecución.
-
-    Args:
-        n_alertas:     Cuántas alertas recuperar (por defecto 5).
-        nivel_minimo:  Nivel de severidad mínimo de Wazuh (por defecto 5).
-
-    Returns:
-        Lista de dicts con los datos de cada alerta (_source de OpenSearch).
+    Devuelve una lista de N alertas del Indexer con nivel >= nivel_minimo,
+    ordenadas por timestamp descendente.
     """
     query = {
         "size": n_alertas,
@@ -178,29 +165,24 @@ def construir_prompt_mitre(alerta: dict) -> str:
     Extrae los campos relevantes de la alerta Wazuh e inyecta los valores
     en la plantilla mitre_prompt.txt.
     """
-    # Metadatos básicos
     rule        = alerta.get("rule", {})
     descripcion = rule.get("description", "Desconocida")
     nivel       = rule.get("level", 0)
     rule_id     = rule.get("id", "N/A")
     agente      = alerta.get("agent", {}).get("name", "Desconocido")
 
-    # MITRE ATT&CK — Wazuh puede devolver string o lista
     mitre    = rule.get("mitre", {})
     m_id     = mitre.get("id", ["N/A"])
     m_tactic = mitre.get("tactic", ["N/A"])
-    m_id     = ", ".join(m_id)     if isinstance(m_id, list)     else str(m_id)
+    m_id     = ", ".join(m_id)     if isinstance(m_id, list) else str(m_id)
     m_tactic = ", ".join(m_tactic) if isinstance(m_tactic, list) else str(m_tactic)
 
-    # Red e identidades
     data     = alerta.get("data", {})
     src_ip   = data.get("srcip", "No registrada")
     usuario  = data.get("srcuser", data.get("dstuser", data.get("user", "No registrado")))
 
-    # Log forense crudo
     full_log = alerta.get("full_log", "No disponible")
 
-    # Cargar plantilla externa
     prompt_path = os.getenv("WZ_PROMPT_PATH", "prompts/mitre_prompt.txt")
     try:
         with open(prompt_path, "r", encoding="utf-8") as f:
@@ -233,42 +215,6 @@ def analizar_alerta(alerta: dict) -> str:
 
     prompt = construir_prompt_mitre(alerta)
     return consultar_ollama(prompt)
-
-
-# =====================================================================
-# MODO INTERACTIVO — BASE PARA FASE 3 (THREAT HUNTING)
-# =====================================================================
-
-def modo_consulta_interactiva(token: str | None):
-    """
-    Bucle interactivo donde el analista puede hacer preguntas en lenguaje natural.
-    El LLM interpreta la consulta y el middleware la traduce a una búsqueda en OpenSearch.
-    NOTA: Implementación básica — se amplía en threat_hunting.py (Semana 5-6).
-    """
-    print("\n" + "="*70)
-    print("MODO THREAT HUNTING — Consultas en Lenguaje Natural")
-    print("Escribe 'salir' para volver al menú principal.")
-    print("="*70)
-
-    while True:
-        consulta = input("\n[HUNTING] ¿Qué quieres investigar? > ").strip()
-        if consulta.lower() in ('salir', 'exit', 'quit'):
-            break
-        if not consulta:
-            continue
-
-        # Por ahora: enviamos la consulta directamente al LLM con contexto de Wazuh
-        # En Semana 5-6 esto se ampliará para generar queries DSL reales
-        prompt_hunting = (
-            f"Eres un analista SOC con acceso a Wazuh. El analista pregunta:\n"
-            f"'{consulta}'\n\n"
-            f"Basándote en técnicas MITRE ATT&CK y logs de seguridad típicos de Wazuh, "
-            f"explica qué buscarías, qué campos de OpenSearch consultarías "
-            f"(timestamp, rule.level, data.srcip, full_log, etc.) y qué indicadores "
-            f"de compromiso (IOCs) esperarías encontrar. Responde en español."
-        )
-        respuesta = consultar_ollama(prompt_hunting)
-        print(f"\n{respuesta}")
 
 
 # =====================================================================
@@ -313,9 +259,10 @@ def main():
     else:
         print("[!] API de Gestión inaccesible — modo solo lectura.")
 
-    # --- Paso 2: Modo Threat Hunting interactivo ---
+    # --- Paso 2: Modo Threat Hunting — delega en threat_hunting.py ---
     if args.hunting:
-        modo_consulta_interactiva(token)
+        from wazuh_llm.threat_hunting import iniciar_modo_hunting
+        iniciar_modo_hunting()
         return
 
     # --- Paso 3: Obtener alertas del Indexer ---
@@ -328,7 +275,8 @@ def main():
 
     print(f"[✓] {len(alertas)} alerta(s) capturada(s) del Indexer (Puerto 9200).")
 
-    # --- Paso 4: Analizar cada alerta con el LLM ---
+    # --- Paso 4: Analizar cada alerta con el LLM y guardar resultados ---
+    resultados = []
     for i, alerta in enumerate(alertas, start=1):
         print(f"\n{'='*70}")
         print(f"  ALERTA {i}/{len(alertas)}  |  INFORME GENERADO POR LLM")
@@ -336,14 +284,16 @@ def main():
 
         resultado = analizar_alerta(alerta)
         print(resultado)
+        resultados.append(resultado)
 
     print(f"\n{'='*70}")
     print(f"[✓] Análisis completado. {len(alertas)} alerta(s) procesada(s).")
 
-    # --- Paso 5: Respuesta Activa (Fase 3) ---
+    # --- Paso 5: Respuesta Activa — delega en respuesta_activa.py ---
     if args.respuesta_activa:
-        print("\n[~] Módulo de Respuesta Activa: ver respuesta_activa.py")
-        # Se implementa en Semana 3-4
+        from wazuh_llm.respuesta_activa import procesar_respuesta_activa
+        for alerta, resultado in zip(alertas, resultados):
+            procesar_respuesta_activa(token, alerta, resultado)
 
 
 if __name__ == "__main__":
