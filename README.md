@@ -8,7 +8,7 @@
 Middleware de código abierto que conecta **Wazuh XDR** con un **LLM local (Ollama)** para transformar alertas de seguridad crudas en informes de inteligencia táctica accionables, sin enviar datos sensibles a servicios externos.
 
 Trabajo de Fin de Grado — Ingeniería Informática, Universidad de Granada  
-Autor: Máximo Martín Moreno · Tutores: Antonio M. Mora García / Jesús Chamorro Martínez
+Autor: Máximo Martín Moreno · Tutores: Antonio Miguel Mora García / Jesús Chamorro Martínez
 
 ---
 
