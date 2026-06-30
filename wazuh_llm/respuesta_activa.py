@@ -45,7 +45,7 @@ def extraer_ips_del_informe(texto_informe: str) -> list[str]:
     vistas = set()
     for ip in todas_las_ips:
         if ip not in vistas and ip not in LISTA_BLANCA_IPS:
-            # Validación básica de rango (descarta 0.x.x.x y 255.x.x.x)
+            # Validación básica de rango (descarta 0.x.x.x y 255.x.x.x) porque no son IPs válidas para bloquear
             octetos = ip.split('.')
             if all(0 < int(o) < 255 for o in octetos):
                 ips_candidatas.append(ip)
@@ -77,6 +77,7 @@ def solicitar_confirmacion(accion: str, detalle: str) -> bool:
     print(f"{'='*70}")
     print("  Esta acción modificará la configuración del firewall del agente.")
     print("  Escribe 'CONFIRMAR' (en mayúsculas) para ejecutar, cualquier otra cosa cancela.")
+    
     
     respuesta = input("\n  Tu decisión > ").strip()
     
@@ -129,6 +130,7 @@ def bloquear_ip_en_agente(token: str, agent_id: str, ip_atacante: str) -> bool:
         }
     }
 
+    # Ejecutamos la llamada a la API
     try:
         r = requests.put(url, headers=headers, json=payload, verify=False, timeout=15)
         if r.status_code in (200, 204):
@@ -172,7 +174,7 @@ def procesar_respuesta_activa(token: str | None, alerta: dict, informe_llm: str)
     # 1. Extraer IPs del informe del LLM
     ips_candidatas = extraer_ips_del_informe(informe_llm)
 
-    # También intentamos coger la IP directamente de la alerta como fuente de verdad
+    # También intentamos coger la IP directamente de la alerta para priorizarla, si no está en la lista blanca
     src_ip_alerta = alerta.get("data", {}).get("srcip")
     if src_ip_alerta and src_ip_alerta not in LISTA_BLANCA_IPS:
         if src_ip_alerta not in ips_candidatas:
@@ -204,7 +206,7 @@ def procesar_respuesta_activa(token: str | None, alerta: dict, informe_llm: str)
                 print(f"[SIM] Comando equivalente: iptables -A INPUT -s {ip} -j DROP")
                 acciones_ejecutadas += 1
 
-    # 3. Resumen
+    # 3. Resumen,
     print(f"\n[✓] Respuesta Activa completada: {acciones_ejecutadas}/{len(ips_candidatas)} acción(es) ejecutada(s).")
     if acciones_ejecutadas == 0:
         print("[~] No se ejecutó ninguna acción. El analista puede revisar y actuar manualmente.")

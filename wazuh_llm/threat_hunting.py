@@ -76,6 +76,7 @@ def reparar_json_truncado(texto: str) -> str:
     dentro_de_string = False
     escape = False
 
+    # Contar los cierres que faltan
     for char in texto:
         if escape:
             escape = False
@@ -84,6 +85,7 @@ def reparar_json_truncado(texto: str) -> str:
             escape = True
             continue
         if char == '"' and not escape:
+            # Si encontramos una comilla, alternamos el estado de dentro_de_string
             dentro_de_string = not dentro_de_string
             continue
         if dentro_de_string:
@@ -93,6 +95,7 @@ def reparar_json_truncado(texto: str) -> str:
         elif char == '[':
             cierres.append(']')
         elif char in ('}', ']'):
+            # Si encontramos un cierre, verificamos si coincide con el último abierto, cierres[-1] es 
             if cierres and cierres[-1] == char:
                 cierres.pop()
 
@@ -263,8 +266,9 @@ def iniciar_modo_hunting():
             print("[-] No se pudo generar una query válida. Intenta reformular la pregunta.")
             continue
 
-        # Mostrar la query generada (útil para el TFG: demuestra la traducción)
+        # Mostrar la query generada al analista para transparencia
         print(f"[~] Query DSL generada:")
+        # imprimemos el JSON de manera legible, ensure_ascii=False para que se vean acentos y caracteres especiales
         print(f"    {json.dumps(query_dsl, ensure_ascii=False)}")
 
         # Paso 2: Ejecutar query

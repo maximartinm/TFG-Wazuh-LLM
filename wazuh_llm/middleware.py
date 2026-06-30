@@ -46,14 +46,17 @@ def validar_respuesta_ia(texto_respuesta: str) -> str:
     si la IA sugiere bloquear IPs críticas. Evita falsos positivos causados
     por IPs que aparecen en el full_log pero no en las recomendaciones.
     """
+    # Buscamos la sección de Respuesta Activa en el informe del LLM
     seccion_respuesta = texto_respuesta
     marcadores = ["PLAN DE RESPUESTA", "RESPUESTA ACTIVA", "TRIAGE", "iptables", "firewall-cmd"]
     for marcador in marcadores:
         idx = texto_respuesta.upper().find(marcador.upper())
         if idx != -1:
+            # texto_respuesta[idx:] hace
             seccion_respuesta = texto_respuesta[idx:]
             break
 
+    # Analizamos la sección de Respuesta Activa para detectar sugerencias de bloqueo de IPs protegidas
     riesgos = []
     palabras_bloqueo = ['iptables', 'firewall-cmd', 'ufw deny', 'ufw block', 'bloquear', '-j DROP', '-j REJECT']
     for ip in LISTA_BLANCA_IPS:
@@ -61,6 +64,7 @@ def validar_respuesta_ia(texto_respuesta: str) -> str:
             if any(cmd in seccion_respuesta.lower() for cmd in palabras_bloqueo):
                 riesgos.append(ip)
 
+    # Si se detectan riesgos, añadimos un aviso al final del informe y marcamos la sección como inválida
     if riesgos:
         aviso = (
             f"\n{'='*70}\n"
@@ -90,7 +94,7 @@ def obtener_token() -> str | None:
         print(f"[!] Login fallido en API de Gestión. Status: {r.status_code}")
         return None
     except requests.exceptions.ConnectionError:
-        print(f"[-] No se puede conectar a la API de Gestión ({API_URL}). ¿Está Wazuh levantado?")
+        print(f"[-] No se puede conectar a la API de Gestión ({API_URL}). Comprueba que esté levantado y accesible.")
         return None
     except Exception as e:
         print(f"[-] Error inesperado en login: {e}")
@@ -127,7 +131,7 @@ def obtener_alertas_del_indexer(n_alertas: int = 5, nivel_minimo: int = 5) -> li
         return []
 
     except requests.exceptions.ConnectionError:
-        print(f"[-] No se puede conectar al Indexer ({INDEXER_URL}). ¿Está Wazuh levantado?")
+        print(f"[-] No se puede conectar al Indexer ({INDEXER_URL}). Comprueba que esté levantado y accesible.")
         return []
     except Exception as e:
         print(f"[!] Error inesperado consultando el Indexer: {e}")
