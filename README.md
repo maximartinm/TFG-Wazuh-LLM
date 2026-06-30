@@ -46,7 +46,7 @@ Este middleware convierte esa alerta en un informe estructurado con contexto MIT
                                │ Puerto 11434
 ┌──────────────────────────────▼──────────────────────────────┐
 │  Zona 4: IA Local                                           │
-│  Ollama Server  →  LLM (Llama 3.2)                         │
+│  Ollama Server  →  LLM (Llama 3.2)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
