@@ -95,7 +95,7 @@ def reparar_json_truncado(texto: str) -> str:
         elif char == '[':
             cierres.append(']')
         elif char in ('}', ']'):
-            # Si encontramos un cierre, verificamos si coincide con el último abierto, cierres[-1] es 
+            # Si coincide con el último abierto pendiente, lo sacamos de la pila
             if cierres and cierres[-1] == char:
                 cierres.pop()
 

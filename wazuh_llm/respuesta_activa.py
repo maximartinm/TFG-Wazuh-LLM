@@ -99,8 +99,8 @@ def bloquear_ip_en_agente(token: str, agent_id: str, ip_atacante: str) -> bool:
     en el firewall del agente especificado.
 
     Usa el endpoint POST /active-response de la API de Wazuh (puerto 55000).
-    Requiere que el agente tenga configurado el active-response 'firewall-drop'
-    en su ossec.conf (es el que viene por defecto en Wazuh).
+    Requiere que el Manager tenga configurado el active-response 'firewall-drop'
+    en su ossec.conf (requiere configuración explícita; ver Capítulo 5 de la memoria).
 
     Args:
         token:       JWT obtenido previamente con obtener_token().
@@ -206,7 +206,7 @@ def procesar_respuesta_activa(token: str | None, alerta: dict, informe_llm: str)
                 print(f"[SIM] Comando equivalente: iptables -A INPUT -s {ip} -j DROP")
                 acciones_ejecutadas += 1
 
-    # 3. Resumen,
+    # 3. Resumen
     print(f"\n[✓] Respuesta Activa completada: {acciones_ejecutadas}/{len(ips_candidatas)} acción(es) ejecutada(s).")
     if acciones_ejecutadas == 0:
         print("[~] No se ejecutó ninguna acción. El analista puede revisar y actuar manualmente.")

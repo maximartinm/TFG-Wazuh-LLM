@@ -52,7 +52,7 @@ def validar_respuesta_ia(texto_respuesta: str) -> str:
     for marcador in marcadores:
         idx = texto_respuesta.upper().find(marcador.upper())
         if idx != -1:
-            # texto_respuesta[idx:] hace
+            # Recortamos desde el marcador para analizar solo la sección relevante
             seccion_respuesta = texto_respuesta[idx:]
             break
 
