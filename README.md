@@ -212,13 +212,15 @@ sudo systemctl enable --now wazuh-agent
 
 ---
 
-## Vectores de ataque probados
+## Vectores de ataque planificados
 
 | Ataque | Regla Wazuh | MITRE | Agente |
 |---|---|---|---|
-| Fuerza bruta SSH (usuario inexistente) | 5710 | T1110.001 | Ubuntu |
-| Contraseña SSH incorrecta | 5503 | T1110 | Ubuntu |
+| Fuerza bruta SSH | 5710 / 5503 | T1110.001 | Ubuntu |
+| Login SSH exitoso tras fuerza bruta | — | T1078 | Ubuntu |
+| Escaneo de puertos (nmap) | — | T1046 | Ubuntu |
 | Escalada de privilegios (sudo) | 5404 | T1548.003 | Ubuntu |
+| Creación de usuario no autorizado | — | T1136.001 | Ubuntu |
 
 ---
 

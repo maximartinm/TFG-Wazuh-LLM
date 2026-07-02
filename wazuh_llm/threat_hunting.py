@@ -231,9 +231,12 @@ def iniciar_modo_hunting():
     print("  → 'escaladas de privilegios con sudo hoy'")
     print("  → 'alertas críticas nivel 10 o superior esta semana'")
     print("  → 'actividad de Mimikatz en agentes Windows'")
-    print("\nEscribe 'salir' para terminar.\n")
+    print("\nComandos especiales:")
+    print("  → 'historial'  Ver consultas realizadas en esta sesión")
+    print("  → 'salir'      Terminar el modo hunting")
+    print()
 
-    historial = []  # Para futuras mejoras: contexto conversacional
+    historial = []
 
     while True:
         try:
@@ -268,7 +271,7 @@ def iniciar_modo_hunting():
 
         # Mostrar la query generada al analista para transparencia
         print(f"[~] Query DSL generada:")
-        # imprimemos el JSON de manera legible, ensure_ascii=False para que se vean acentos y caracteres especiales
+        # Imprimir el JSON de manera legible
         print(f"    {json.dumps(query_dsl, ensure_ascii=False)}")
 
         # Paso 2: Ejecutar query
