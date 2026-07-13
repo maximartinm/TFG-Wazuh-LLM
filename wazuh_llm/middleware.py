@@ -48,7 +48,7 @@ def validar_respuesta_ia(texto_respuesta: str) -> str:
     """
     # Buscamos la sección de Respuesta Activa en el informe del LLM
     seccion_respuesta = texto_respuesta
-    marcadores = ["PLAN DE RESPUESTA", "RESPUESTA ACTIVA", "TRIAGE", "iptables", "firewall-cmd"]
+    marcadores = ["PLAN DE RESPUESTA", "RESPUESTA ACTIVA", "TRIAJE", "iptables", "firewall-cmd"]
     for marcador in marcadores:
         idx = texto_respuesta.upper().find(marcador.upper())
         if idx != -1:

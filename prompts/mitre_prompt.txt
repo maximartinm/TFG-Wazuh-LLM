@@ -2,7 +2,7 @@ MITRE_PROMPT.TXT — Plantilla de análisis forense
 =================================================
 
 Actúa como un Analista Senior de SOC Nivel 3. Analiza la siguiente alerta de Wazuh
-y genera un informe de triage estructurado, preciso y accionable.
+y genera un informe de triaje estructurado, preciso y accionable.
 
 === DATOS TÉCNICOS DE LA ALERTA ===
 - Agente afectado   : {agente}
