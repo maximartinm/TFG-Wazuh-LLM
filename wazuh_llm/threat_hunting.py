@@ -37,9 +37,9 @@ ESQUEMA DE ÍNDICE WAZUH (campos disponibles):
 - timestamp: fecha/hora del evento (formato ISO 8601)
 - rule.level: severidad (entero 1-15, siendo 15 el más crítico)
 - rule.id: ID de la regla Wazuh (string)
-- rule.description: descripción del evento
-- rule.mitre.id: técnica MITRE ATT&CK (ej: "T1110")
-- rule.mitre.tactic: táctica MITRE (ej: "Credential Access")
+- rule.description: descripción del evento (campo keyword; usa query_string con comodines para búsqueda de texto)
+- rule.mitre.id: código de técnica MITRE ATT&CK (ej: "T1110", "T1548.003") — usa match con el código exacto
+- rule.mitre.tactic: nombre de táctica en inglés (ej: "Credential Access", "Privilege Escalation") — usa match
 - agent.name: nombre del agente/endpoint
 - agent.id: ID del agente
 - data.srcip: IP origen del ataque
@@ -51,20 +51,60 @@ REGLAS OBLIGATORIAS:
 1. Responde SOLO con JSON válido, sin texto adicional, sin explicaciones, sin bloques de código markdown.
 2. El JSON debe ser una query DSL de OpenSearch con estructura {"size": N, "query": {...}, "sort": [...]}
 3. Para rangos de tiempo, usa "now-Xh" para horas, "now-Xd" para días. El campo de tiempo es "timestamp".
-4. Si la pregunta menciona "hoy" usa: "gt": "now/d"  
+4. Si la pregunta menciona "hoy" usa: "gt": "now/d"
 5. Si menciona "últimas 12 horas" usa: "gt": "now-12h"
 6. Limita los resultados a 10 por defecto salvo que se especifique otro número.
 7. Ordena siempre por timestamp descendente.
+8. Para buscar texto en rule.description usa query_string con comodines: {"query_string": {"query": "*término*", "fields": ["rule.description"]}}
+9. Para buscar por técnica MITRE, usa rule.mitre.id con el código exacto (ej: "T1110"), NO rule.mitre.tactic.
 
 EJEMPLOS:
 Pregunta: "intentos de fuerza bruta SSH de las últimas 2 horas"
-Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"rule.description": "ssh"}}, {"range": {"timestamp": {"gt": "now-2h"}}}, {"range": {"rule.level": {"gte": 5}}}]}}}
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"query_string": {"query": "*ssh*", "fields": ["rule.description"]}}, {"range": {"timestamp": {"gt": "now-2h"}}}, {"range": {"rule.level": {"gte": 5}}}]}}}
 
-Pregunta: "escaladas de privilegios sudo hoy"  
-Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"rule.description": "sudo"}}, {"range": {"timestamp": {"gt": "now/d"}}}]}}}
+Pregunta: "escaladas de privilegios sudo hoy"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"query_string": {"query": "*sudo*", "fields": ["rule.description"]}}, {"range": {"timestamp": {"gt": "now/d"}}}]}}}
+
+Pregunta: "eventos con tecnica mitre T1110"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"rule.mitre.id": "T1110"}}]}}}
+
+Pregunta: "alertas de la IP 10.0.0.1"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"data.srcip": "10.0.0.1"}}]}}}
 
 Ahora convierte esta pregunta:
 {consulta_usuario}"""
+
+def extraer_primer_json(texto: str) -> str:
+    """
+    Extrae el primer objeto JSON completo y balanceado del texto,
+    ignorando cualquier carácter sobrante al final (} extra, comillas, etc.).
+    """
+    inicio = texto.find('{')
+    if inicio == -1:
+        return texto
+    depth = 0
+    dentro_de_string = False
+    escape = False
+    for i, char in enumerate(texto[inicio:], start=inicio):
+        if escape:
+            escape = False
+            continue
+        if char == '\\' and dentro_de_string:
+            escape = True
+            continue
+        if char == '"':
+            dentro_de_string = not dentro_de_string
+            continue
+        if dentro_de_string:
+            continue
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return texto[inicio:i + 1]
+    return texto[inicio:]
+
 
 def reparar_json_truncado(texto: str) -> str:
     """
@@ -124,8 +164,9 @@ def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
         # Limpiar bloques markdown que el modelo incluye a veces
         raw = raw.replace("```json", "").replace("```", "").strip()
 
-        # Reparar JSON truncado: contar llaves y corchetes sin cerrar
-        # y añadir los cierres que faltan al final
+        # Extraer el primer JSON completo (elimina } extra o caracteres sueltos al final)
+        raw = extraer_primer_json(raw)
+        # Reparar JSON truncado si faltan cierres
         raw = reparar_json_truncado(raw)
 
         query_dsl = json.loads(raw)
