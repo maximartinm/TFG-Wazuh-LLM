@@ -76,8 +76,13 @@ Ahora convierte esta pregunta:
 
 def extraer_primer_json(texto: str) -> str:
     """
-    Extrae el primer objeto JSON completo y balanceado del texto,
-    ignorando cualquier carácter sobrante al final (} extra, comillas, etc.).
+    Resuelve el caso en que el modelo cierra bien el JSON pero añade
+    caracteres extra al final (una llave de más, una comilla suelta...).
+    Recorre el texto llevando un contador 'depth': cada '{' lo sube,
+    cada '}' lo baja. Cuando depth llega a 0 por primera vez, el JSON
+    está completamente cerrado — todo lo que venga después se descarta.
+    El flag 'dentro_de_string' evita contar llaves que aparecen dentro
+    de valores de texto (ej: "descripción": "usa { aquí").
     """
     inicio = texto.find('{')
     if inicio == -1:
@@ -86,37 +91,45 @@ def extraer_primer_json(texto: str) -> str:
     dentro_de_string = False
     escape = False
     for i, char in enumerate(texto[inicio:], start=inicio):
+        # El char anterior era \: este char es literal, no cuenta como estructura
         if escape:
             escape = False
             continue
+        # \ dentro de un string activa el flag de escape para el siguiente char
         if char == '\\' and dentro_de_string:
             escape = True
             continue
+        # Las comillas abren y cierran el modo string
         if char == '"':
             dentro_de_string = not dentro_de_string
             continue
+        # Dentro de un string las llaves son texto, no estructura JSON
         if dentro_de_string:
             continue
         if char == '{':
-            depth += 1
+            depth += 1          # abrimos un nivel de objeto
         elif char == '}':
             depth -= 1
-            if depth == 0:
+            if depth == 0:      # JSON completamente cerrado: devolvemos solo hasta aquí
                 return texto[inicio:i + 1]
     return texto[inicio:]
 
 
 def reparar_json_truncado(texto: str) -> str:
     """
-    Los LLMs locales a veces truncan el JSON dejando llaves o corchetes
-    sin cerrar. Esta función cuenta los abiertos y añade los cierres
-    que faltan al final, en orden inverso.
+    Resuelve el caso opuesto: el modelo se queda sin tokens y entrega
+    un JSON cortado al que le faltan cierres (ej: '{"query": {"bool": [').
+    Usa una pila ('cierres'): cada '{' apila el '}' esperado, cada '['
+    apila el ']' esperado. Cuando encuentra un cierre real que coincide
+    con el tope de la pila, lo saca (está correctamente cerrado). Al
+    terminar el recorrido, lo que quede en la pila son los cierres que
+    faltan; se añaden al final en orden inverso.
+    El flag 'dentro_de_string' evita contar llaves dentro de valores de texto.
     """
-    cierres = []
+    cierres = []  # pila de cierres pendientes
     dentro_de_string = False
     escape = False
 
-    # Contar los cierres que faltan
     for char in texto:
         if escape:
             escape = False
@@ -125,21 +138,19 @@ def reparar_json_truncado(texto: str) -> str:
             escape = True
             continue
         if char == '"' and not escape:
-            # Si encontramos una comilla, alternamos el estado de dentro_de_string
             dentro_de_string = not dentro_de_string
             continue
         if dentro_de_string:
             continue
         if char == '{':
-            cierres.append('}')
+            cierres.append('}')   # apilamos el cierre que se esperará
         elif char == '[':
             cierres.append(']')
         elif char in ('}', ']'):
-            # Si coincide con el último abierto pendiente, lo sacamos de la pila
             if cierres and cierres[-1] == char:
-                cierres.pop()
+                cierres.pop()     # cierre real encontrado → cancela el pendiente
 
-    # Añadir los cierres que faltan en orden inverso
+    # Los cierres que quedaron en la pila son los que faltan
     return texto + ''.join(reversed(cierres))
 
 def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
