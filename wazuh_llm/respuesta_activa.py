@@ -120,11 +120,10 @@ def bloquear_ip_en_agente(token: str, agent_id: str, ip_atacante: str) -> bool:
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    # firewall-drop es el comando de active-response estándar de Wazuh
-    # que añade una regla iptables DROP para la IP indicada
+    # firewall-drop0: nombre registrado en ar.conf (sufijo 0 = sin timeout, bloqueo permanente)
+    # El agente resuelve el ejecutable /var/ossec/active-response/bin/firewall-drop
     payload = {
-        "command": "firewall-drop",
-        "arguments": [ip_atacante],
+        "command": "firewall-drop0",
         "alert": {
             "data": {"srcip": ip_atacante}
         }
