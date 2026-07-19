@@ -214,7 +214,7 @@ def _consultar_groq(prompt: str, modelo: str) -> str:
 def consultar_llm(prompt: str, proveedor: str = "ollama", modelo: str | None = None) -> tuple[str, float]:
     """
     Despacha el prompt al proveedor indicado y devuelve (respuesta, segundos).
-    Proveedores disponibles: ollama, gemini, openai.
+    Proveedores disponibles: ollama, gemini, groq.
     """
     modelo_efectivo = modelo or MODELOS_DEFAULT.get(proveedor, proveedor)
     inicio = time.time()
