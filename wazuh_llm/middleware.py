@@ -39,7 +39,7 @@ LISTA_BLANCA_IPS = [
 # Modelo por defecto para cada proveedor
 MODELOS_DEFAULT = {
     "ollama": os.getenv("WZ_MODELO", "llama3.2"),
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-1.5-flash",
     "groq":   "llama-3.3-70b-versatile",
 }
 
