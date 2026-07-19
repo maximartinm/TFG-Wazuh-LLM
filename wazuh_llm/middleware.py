@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import argparse
+import pathlib
 import requests
 import urllib3
 from dotenv import load_dotenv
@@ -18,7 +19,10 @@ from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-load_dotenv()
+# Carga .env desde el directorio raíz del paquete (Codigo/) independientemente
+# del directorio desde el que se ejecute el comando wazuh-ia
+_env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path)
 
 # --- Plano de Gestión (API Manager - Puerto 55000) ---
 API_URL   = os.getenv('WZ_API_URL')
@@ -39,7 +43,7 @@ LISTA_BLANCA_IPS = [
 # Modelo por defecto para cada proveedor
 MODELOS_DEFAULT = {
     "ollama": os.getenv("WZ_MODELO", "llama3.2"),
-    "gemini": "gemini-1.5-flash",
+    "gemini": "gemini-2.0-flash",
     "groq":   "llama-3.3-70b-versatile",
 }
 
@@ -171,18 +175,17 @@ def _consultar_ollama(prompt: str, modelo: str) -> str:
 def _consultar_gemini(prompt: str, modelo: str) -> str:
     """Envía el prompt a la API de Gemini (Google) y devuelve la respuesta."""
     try:
-        import google.generativeai as genai
+        from google import genai
     except ImportError:
-        return "[-] Paquete 'google-generativeai' no instalado. Ejecuta: pip install google-generativeai"
+        return "[-] Paquete 'google-genai' no instalado. Ejecuta: pip install google-genai"
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return "[-] GEMINI_API_KEY no configurada en .env"
 
     try:
-        genai.configure(api_key=api_key)
-        llm = genai.GenerativeModel(modelo)
-        response = llm.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model=modelo, contents=prompt)
         return validar_respuesta_ia(response.text)
     except Exception as e:
         return f"[-] Error consultando Gemini ({modelo}): {e}"
