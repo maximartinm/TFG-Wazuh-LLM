@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import argparse
-import pathlib
 import requests
 import urllib3
 from dotenv import load_dotenv
@@ -19,10 +18,7 @@ from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Carga .env desde el directorio raíz del paquete (Codigo/) independientemente
-# del directorio desde el que se ejecute el comando wazuh-ia
-_env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_env_path)
+load_dotenv()
 
 # --- Plano de Gestión (API Manager - Puerto 55000) ---
 API_URL   = os.getenv('WZ_API_URL')
