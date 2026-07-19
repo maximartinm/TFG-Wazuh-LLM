@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Middleware principal del TFG: Wazuh + LLM
-Orquestador que conecta el ecosistema Wazuh con un LLM local (Ollama)
+Orquestador que conecta el ecosistema Wazuh con un LLM (Ollama, Gemini o OpenAI)
 para enriquecer alertas de seguridad con análisis MITRE ATT&CK.
 """
 import os
 import sys
+import time
 import argparse
 import requests
 import urllib3
@@ -34,6 +35,13 @@ LISTA_BLANCA_IPS = [
     "127.0.0.1", "::1", "0.0.0.0",
     os.getenv('WZ_MANAGER_IP', '127.0.0.1')
 ]
+
+# Modelo por defecto para cada proveedor
+MODELOS_DEFAULT = {
+    "ollama": os.getenv("WZ_MODELO", "llama3.2"),
+    "gemini": "gemini-1.5-flash",
+    "openai": "gpt-4o",
+}
 
 
 # =====================================================================
@@ -139,19 +147,15 @@ def obtener_alertas_del_indexer(n_alertas: int = 5, nivel_minimo: int = 5) -> li
 
 
 # =====================================================================
-# MOTOR DE INTELIGENCIA ARTIFICIAL
+# MOTORES LLM — BACKENDS POR PROVEEDOR
 # =====================================================================
 
-def consultar_ollama(prompt: str) -> str:
+def _consultar_ollama(prompt: str, modelo: str) -> str:
     """
     Envía el prompt al servidor Ollama local y devuelve la respuesta.
     Timeout de 180s porque los LLMs locales pueden ser lentos.
     """
-    payload = {
-        "model": os.getenv("WZ_MODELO", "llama3.2"),
-        "prompt": prompt,
-        "stream": False
-    }
+    payload = {"model": modelo, "prompt": prompt, "stream": False}
     try:
         response = requests.post(os.getenv("WZ_OLLAMA_URL"), json=payload, timeout=180)
         ai_output = response.json().get("response", "[Sin respuesta del modelo]")
@@ -163,6 +167,73 @@ def consultar_ollama(prompt: str) -> str:
     except Exception as e:
         return f"[-] Error inesperado comunicándose con Ollama: {e}"
 
+
+def _consultar_gemini(prompt: str, modelo: str) -> str:
+    """Envía el prompt a la API de Gemini (Google) y devuelve la respuesta."""
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        return "[-] Paquete 'google-generativeai' no instalado. Ejecuta: pip install google-generativeai"
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return "[-] GEMINI_API_KEY no configurada en .env"
+
+    try:
+        genai.configure(api_key=api_key)
+        llm = genai.GenerativeModel(modelo)
+        response = llm.generate_content(prompt)
+        return validar_respuesta_ia(response.text)
+    except Exception as e:
+        return f"[-] Error consultando Gemini ({modelo}): {e}"
+
+
+def _consultar_openai(prompt: str, modelo: str) -> str:
+    """Envía el prompt a la API de OpenAI y devuelve la respuesta."""
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return "[-] Paquete 'openai' no instalado. Ejecuta: pip install openai"
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "[-] OPENAI_API_KEY no configurada en .env"
+
+    try:
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        texto = response.choices[0].message.content
+        return validar_respuesta_ia(texto)
+    except Exception as e:
+        return f"[-] Error consultando OpenAI ({modelo}): {e}"
+
+
+def consultar_llm(prompt: str, proveedor: str = "ollama", modelo: str | None = None) -> tuple[str, float]:
+    """
+    Despacha el prompt al proveedor indicado y devuelve (respuesta, segundos).
+    Proveedores disponibles: ollama, gemini, openai.
+    """
+    modelo_efectivo = modelo or MODELOS_DEFAULT.get(proveedor, proveedor)
+    inicio = time.time()
+
+    if proveedor == "ollama":
+        respuesta = _consultar_ollama(prompt, modelo_efectivo)
+    elif proveedor == "gemini":
+        respuesta = _consultar_gemini(prompt, modelo_efectivo)
+    elif proveedor == "openai":
+        respuesta = _consultar_openai(prompt, modelo_efectivo)
+    else:
+        respuesta = f"[-] Proveedor no reconocido: '{proveedor}'. Opciones: ollama, gemini, openai"
+
+    return respuesta, round(time.time() - inicio, 2)
+
+
+# =====================================================================
+# CONSTRUCCIÓN DEL PROMPT
+# =====================================================================
 
 def construir_prompt_mitre(alerta: dict) -> str:
     """
@@ -207,23 +278,46 @@ def construir_prompt_mitre(alerta: dict) -> str:
         )
 
 
-def analizar_alerta(alerta: dict) -> str:
+# =====================================================================
+# PIPELINE DE ANÁLISIS
+# =====================================================================
+
+def analizar_alerta(alerta: dict, proveedor: str = "ollama", modelo: str | None = None) -> tuple[str, float]:
     """
     Pipeline completo para una alerta: extrae contexto → construye prompt → consulta LLM.
+    Devuelve (informe, segundos_de_inferencia).
     """
     nivel   = alerta.get("rule", {}).get("level", 0)
     agente  = alerta.get("agent", {}).get("name", "Desconocido")
     rule_id = alerta.get("rule", {}).get("id", "N/A")
+    modelo_efectivo = modelo or MODELOS_DEFAULT.get(proveedor, proveedor)
 
     print(f"\n[IA] Procesando evento de nivel {nivel} en agente '{agente}' (Regla ID: {rule_id})...")
+    print(f"[IA] Proveedor: {proveedor} | Modelo: {modelo_efectivo}")
 
     prompt = construir_prompt_mitre(alerta)
-    return consultar_ollama(prompt)
+    return consultar_llm(prompt, proveedor, modelo)
 
 
 # =====================================================================
 # PUNTO DE ENTRADA PRINCIPAL
 # =====================================================================
+
+OPCIONES_PROVEEDOR = {"1": "ollama", "2": "gemini", "3": "openai"}
+
+
+def seleccionar_proveedor() -> str:
+    """Muestra un menú interactivo para elegir el proveedor LLM."""
+    print("\nSelecciona el proveedor LLM:")
+    print(f"  [1] Ollama  — {MODELOS_DEFAULT['ollama']} (local)")
+    print(f"  [2] Gemini  — {MODELOS_DEFAULT['gemini']}")
+    print(f"  [3] OpenAI  — {MODELOS_DEFAULT['openai']}")
+    while True:
+        opcion = input("\nOpción > ").strip()
+        if opcion in OPCIONES_PROVEEDOR:
+            return OPCIONES_PROVEEDOR[opcion]
+        print("[!] Opción no válida. Escribe 1, 2 o 3.")
+
 
 def parsear_argumentos():
     """Define los modos de ejecución disponibles via CLI."""
@@ -239,21 +333,29 @@ def parsear_argumentos():
         help='Nivel mínimo de alerta a procesar (por defecto: 5)'
     )
     parser.add_argument(
+        '--proveedor', type=str, default=None,
+        choices=['ollama', 'gemini', 'openai'],
+        help='Proveedor LLM (si no se indica, se pregunta interactivamente)'
+    )
+    parser.add_argument(
         '--hunting', action='store_true',
         help='Activa el modo de consultas en lenguaje natural (Threat Hunting)'
     )
     parser.add_argument(
         '--respuesta-activa', action='store_true',
-        help='Activa el módulo de Respuesta Activa (Fase 3, requiere confirmación humana)'
+        help='Activa el módulo de Respuesta Activa (requiere confirmación humana)'
     )
     return parser.parse_args()
 
 
 def main():
     args = parsear_argumentos()
+    proveedor = args.proveedor or seleccionar_proveedor()
+    modelo_efectivo = MODELOS_DEFAULT.get(proveedor, proveedor)
 
     print("=" * 70)
     print("  Middleware TFG — Wazuh + LLM  |  Arquitectura SOC")
+    print(f"  Proveedor: {proveedor} | Modelo: {modelo_efectivo}")
     print("=" * 70)
 
     # --- Paso 1: Conectar a la API de Gestión ---
@@ -279,19 +381,24 @@ def main():
 
     print(f"[✓] {len(alertas)} alerta(s) capturada(s) del Indexer (Puerto 9200).")
 
-    # --- Paso 4: Analizar cada alerta con el LLM y guardar resultados ---
+    # --- Paso 4: Analizar cada alerta con el LLM ---
     resultados = []
+    tiempos = []
     for i, alerta in enumerate(alertas, start=1):
         print(f"\n{'='*70}")
         print(f"  ALERTA {i}/{len(alertas)}  |  INFORME GENERADO POR LLM")
         print(f"{'='*70}")
 
-        resultado = analizar_alerta(alerta)
+        resultado, tiempo = analizar_alerta(alerta, proveedor)
         print(resultado)
+        print(f"\n[⏱] Tiempo de inferencia: {tiempo:.2f}s")
         resultados.append(resultado)
+        tiempos.append(tiempo)
 
     print(f"\n{'='*70}")
     print(f"[✓] Análisis completado. {len(alertas)} alerta(s) procesada(s).")
+    if len(tiempos) > 1:
+        print(f"[⏱] Tiempo total: {sum(tiempos):.2f}s | Media por alerta: {sum(tiempos)/len(tiempos):.2f}s")
 
     # --- Paso 5: Respuesta Activa — delega en respuesta_activa.py ---
     if args.respuesta_activa:
