@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Middleware principal del TFG: Wazuh + LLM
-Orquestador que conecta el ecosistema Wazuh con un LLM (Ollama, Gemini o OpenAI)
+Orquestador que conecta el ecosistema Wazuh con un LLM (Ollama, Gemini o Groq)
 para enriquecer alertas de seguridad con análisis MITRE ATT&CK.
 """
 import os
@@ -40,7 +40,7 @@ LISTA_BLANCA_IPS = [
 MODELOS_DEFAULT = {
     "ollama": os.getenv("WZ_MODELO", "llama3.2"),
     "gemini": "gemini-1.5-flash",
-    "openai": "gpt-4o",
+    "groq":   "llama-3.3-70b-versatile",
 }
 
 
@@ -188,19 +188,19 @@ def _consultar_gemini(prompt: str, modelo: str) -> str:
         return f"[-] Error consultando Gemini ({modelo}): {e}"
 
 
-def _consultar_openai(prompt: str, modelo: str) -> str:
-    """Envía el prompt a la API de OpenAI y devuelve la respuesta."""
+def _consultar_groq(prompt: str, modelo: str) -> str:
+    """Envía el prompt a la API de Groq y devuelve la respuesta. Usa el cliente OpenAI con base URL de Groq."""
     try:
         from openai import OpenAI
     except ImportError:
         return "[-] Paquete 'openai' no instalado. Ejecuta: pip install openai"
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        return "[-] OPENAI_API_KEY no configurada en .env"
+        return "[-] GROQ_API_KEY no configurada en .env"
 
     try:
-        client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
         response = client.chat.completions.create(
             model=modelo,
             messages=[{"role": "user", "content": prompt}]
@@ -208,7 +208,7 @@ def _consultar_openai(prompt: str, modelo: str) -> str:
         texto = response.choices[0].message.content
         return validar_respuesta_ia(texto)
     except Exception as e:
-        return f"[-] Error consultando OpenAI ({modelo}): {e}"
+        return f"[-] Error consultando Groq ({modelo}): {e}"
 
 
 def consultar_llm(prompt: str, proveedor: str = "ollama", modelo: str | None = None) -> tuple[str, float]:
@@ -223,10 +223,10 @@ def consultar_llm(prompt: str, proveedor: str = "ollama", modelo: str | None = N
         respuesta = _consultar_ollama(prompt, modelo_efectivo)
     elif proveedor == "gemini":
         respuesta = _consultar_gemini(prompt, modelo_efectivo)
-    elif proveedor == "openai":
-        respuesta = _consultar_openai(prompt, modelo_efectivo)
+    elif proveedor == "groq":
+        respuesta = _consultar_groq(prompt, modelo_efectivo)
     else:
-        respuesta = f"[-] Proveedor no reconocido: '{proveedor}'. Opciones: ollama, gemini, openai"
+        respuesta = f"[-] Proveedor no reconocido: '{proveedor}'. Opciones: ollama, gemini, groq"
 
     return respuesta, round(time.time() - inicio, 2)
 
@@ -303,7 +303,7 @@ def analizar_alerta(alerta: dict, proveedor: str = "ollama", modelo: str | None 
 # PUNTO DE ENTRADA PRINCIPAL
 # =====================================================================
 
-OPCIONES_PROVEEDOR = {"1": "ollama", "2": "gemini", "3": "openai"}
+OPCIONES_PROVEEDOR = {"1": "ollama", "2": "gemini", "3": "groq"}
 
 
 def seleccionar_proveedor() -> str:
@@ -311,7 +311,7 @@ def seleccionar_proveedor() -> str:
     print("\nSelecciona el proveedor LLM:")
     print(f"  [1] Ollama  — {MODELOS_DEFAULT['ollama']} (local)")
     print(f"  [2] Gemini  — {MODELOS_DEFAULT['gemini']}")
-    print(f"  [3] OpenAI  — {MODELOS_DEFAULT['openai']}")
+    print(f"  [3] Groq    — {MODELOS_DEFAULT['groq']} (nube, open-source)")
     while True:
         opcion = input("\nOpción > ").strip()
         if opcion in OPCIONES_PROVEEDOR:
@@ -334,7 +334,7 @@ def parsear_argumentos():
     )
     parser.add_argument(
         '--proveedor', type=str, default=None,
-        choices=['ollama', 'gemini', 'openai'],
+        choices=['ollama', 'gemini', 'groq'],
         help='Proveedor LLM (si no se indica, se pregunta interactivamente)'
     )
     parser.add_argument(
