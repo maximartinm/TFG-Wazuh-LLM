@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-app.py — Dashboard principal del middleware Wazuh + LLM.
-Punto de entrada de la interfaz web: streamlit run app.py
+Home.py — Dashboard principal del middleware Wazuh + LLM.
+Punto de entrada de la interfaz web: streamlit run Home.py
 """
 import streamlit as st
 from wazuh_llm.middleware import obtener_token, obtener_alertas_del_indexer
@@ -15,28 +15,52 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Quita el padding superior excesivo */
-    .block-container { padding-top: 2rem; }
-    /* Badge de severidad */
-    .badge {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.75rem;
-        font-weight: 600;
+    .block-container { padding-top: 1.5rem; }
+    .tfg-header {
+        background: linear-gradient(135deg, #1a1d27 0%, #0e1117 100%);
+        border: 1px solid #2d2d3d;
+        border-left: 5px solid #e84040;
+        border-radius: 8px;
+        padding: 1.8rem 2rem;
+        margin-bottom: 1.5rem;
     }
+    .tfg-title {
+        font-size: 1.9rem;
+        font-weight: 700;
+        color: #fafafa;
+        margin: 0 0 0.3rem 0;
+    }
+    .tfg-subtitle {
+        font-size: 1rem;
+        color: #aaa;
+        margin: 0 0 1.2rem 0;
+    }
+    .tfg-meta {
+        font-size: 0.85rem;
+        color: #ccc;
+        line-height: 1.8;
+    }
+    .tfg-meta strong { color: #fafafa; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Cabecera ──────────────────────────────────────────────────────────
-st.title("🛡️ Wazuh + LLM")
-st.caption("Centro de Operaciones de Seguridad asistido por modelos de lenguaje")
-st.divider()
+# ── Cabecera del TFG ──────────────────────────────────────────────────
+st.markdown("""
+<div class="tfg-header">
+    <p class="tfg-title">🛡️ Wazuh + LLM</p>
+    <p class="tfg-subtitle">Integración de LLMs con Wazuh para enriquecer las alertas y apoyar a la toma de decisiones</p>
+    <div class="tfg-meta">
+        <strong>Trabajo de Fin de Grado</strong> · Grado en Ingeniería Informática · ETSIIT, Universidad de Granada<br>
+        <strong>Autor:</strong> Máximo Martín Moreno<br>
+        <strong>Tutores:</strong> Antonio Miguel Mora García · Jesús Chamorro Martínez
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Estado del sistema ────────────────────────────────────────────────
 @st.cache_data(ttl=30, show_spinner=False)
 def verificar_conexiones():
-    token = obtener_token()
+    token  = obtener_token()
     alertas = obtener_alertas_del_indexer(n_alertas=1, nivel_minimo=1)
     return token, len(alertas) > 0
 
@@ -71,12 +95,11 @@ st.subheader("Resumen de alertas recientes")
 if alertas:
     niveles = [a.get("rule", {}).get("level", 0) for a in alertas]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Alertas cargadas", len(alertas))
+    c1.metric("Alertas cargadas",    len(alertas))
     c2.metric("🔴 Críticas  (≥ 12)", sum(1 for n in niveles if n >= 12))
     c3.metric("🟠 Altas  (8 – 11)",  sum(1 for n in niveles if 8 <= n < 12))
     c4.metric("🟡 Medias  (5 – 7)",  sum(1 for n in niveles if 5 <= n < 8))
 
-    # Mini feed con las 5 más recientes
     st.markdown("**Alertas más recientes**")
     for a in alertas[:5]:
         rule   = a.get("rule", {})
