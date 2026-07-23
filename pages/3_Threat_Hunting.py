@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
 3_Threat_Hunting.py — Consultas en lenguaje natural sobre el historial de alertas.
-Traduce la pregunta del analista a Query DSL de OpenSearch y muestra los resultados.
 """
 import os
-import json
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -20,26 +18,9 @@ st.set_page_config(
 
 st.title("🔍 Threat Hunting en Lenguaje Natural")
 st.caption("Escribe una pregunta y el sistema la traduce a una query OpenSearch para buscar en el historial de alertas")
+st.divider()
 
-# ── Sidebar con ejemplos ──────────────────────────────────────────────
-with st.sidebar:
-    st.subheader("Ejemplos de consultas")
-    ejemplos = [
-        "Intentos de fuerza bruta SSH de las últimas 6 horas",
-        "Escaladas de privilegios con sudo hoy",
-        "Alertas críticas de nivel 12 o superior esta semana",
-        "Actividad desde la IP 192.168.64.1",
-        "Eventos con técnica MITRE T1110",
-    ]
-    for ejemplo in ejemplos:
-        if st.button(ejemplo, use_container_width=True):
-            st.session_state["consulta_hunting"] = ejemplo
-            st.rerun()
-
-    st.divider()
-    st.caption("ℹ️ La traducción NL → DSL usa Ollama (modelo local).")
-
-# ── Input ─────────────────────────────────────────────────────────────
+# ── Input principal ───────────────────────────────────────────────────
 consulta = st.text_input(
     "Consulta en lenguaje natural",
     value=st.session_state.get("consulta_hunting", ""),
@@ -47,6 +28,25 @@ consulta = st.text_input(
 )
 
 buscar = st.button("🔍  Buscar", type="primary")
+
+# ── Ejemplos ──────────────────────────────────────────────────────────
+st.markdown("**Ejemplos de consultas:**")
+ejemplos = [
+    "Intentos de fuerza bruta SSH de las últimas 6 horas",
+    "Escaladas de privilegios con sudo hoy",
+    "Alertas críticas de nivel 12 o superior esta semana",
+    "Actividad desde la IP 192.168.64.1",
+    "Eventos con técnica MITRE T1110",
+]
+cols = st.columns(len(ejemplos))
+for col, ejemplo in zip(cols, ejemplos):
+    with col:
+        if st.button(ejemplo, use_container_width=True):
+            st.session_state["consulta_hunting"] = ejemplo
+            st.rerun()
+
+st.caption("ℹ️ La traducción NL → DSL usa Ollama (modelo local).")
+st.divider()
 
 # ── Búsqueda ──────────────────────────────────────────────────────────
 if buscar and consulta.strip():
@@ -57,7 +57,7 @@ if buscar and consulta.strip():
         query_dsl = nl_a_query_dsl(consulta.strip(), ollama_url, modelo)
 
     if not query_dsl:
-        st.error("No se pudo traducir la consulta a una query válida. Prueba a reformularla.")
+        st.error("No se pudo traducir la consulta. Prueba a reformularla.")
         st.stop()
 
     with st.expander("Query DSL generada", expanded=False):
@@ -65,8 +65,6 @@ if buscar and consulta.strip():
 
     with st.spinner("Consultando el Indexer de Wazuh..."):
         resultados = ejecutar_query(query_dsl)
-
-    st.divider()
 
     if not resultados:
         st.info(f"No se encontraron eventos para: *{consulta}*")
@@ -82,11 +80,10 @@ if buscar and consulta.strip():
         rows = []
         for a in resultados:
             rule  = a.get("rule", {})
-            nivel = rule.get("level", 0)
             rows.append({
                 "Timestamp":   a.get("timestamp", "")[:19].replace("T", " "),
                 "Agente":      a.get("agent", {}).get("name", "—"),
-                "Nivel":       nivel_badge(nivel),
+                "Nivel":       nivel_badge(rule.get("level", 0)),
                 "Descripción": rule.get("description", "—"),
                 "IP Origen":   a.get("data", {}).get("srcip", "—"),
                 "Regla ID":    rule.get("id", "—"),

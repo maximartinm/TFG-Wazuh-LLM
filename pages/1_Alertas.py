@@ -14,14 +14,22 @@ st.set_page_config(
 
 st.title("🚨 Explorador de Alertas")
 st.caption("Visualización y filtrado de alertas recientes del Indexer de Wazuh")
+st.divider()
 
-# ── Sidebar ───────────────────────────────────────────────────────────
-with st.sidebar:
-    st.subheader("Filtros")
-    n_alertas    = st.selectbox("Número de alertas", [10, 20, 50, 100], index=1)
+# ── Filtros en el cuerpo ──────────────────────────────────────────────
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    n_alertas = st.selectbox("Número de alertas", [10, 20, 50, 100], index=1)
+with col2:
     nivel_minimo = st.slider("Nivel mínimo de severidad", 1, 15, 5)
-    if st.button("🔄 Actualizar", use_container_width=True):
+with col3:
+    st.write("")
+    st.write("")
+    actualizar = st.button("🔄 Actualizar", use_container_width=True)
+    if actualizar:
         st.cache_data.clear()
+
+st.divider()
 
 # ── Carga de alertas ──────────────────────────────────────────────────
 @st.cache_data(ttl=60, show_spinner=False)
@@ -51,13 +59,13 @@ for a in alertas:
     ids    = mitre.get("id", [])
     tactic = mitre.get("tactic", [])
     rows.append({
-        "Timestamp":  a.get("timestamp", "")[:19].replace("T", " "),
-        "Agente":     a.get("agent", {}).get("name", "—"),
-        "Nivel":      nivel_badge(rule.get("level", 0)),
+        "Timestamp":   a.get("timestamp", "")[:19].replace("T", " "),
+        "Agente":      a.get("agent", {}).get("name", "—"),
+        "Nivel":       nivel_badge(rule.get("level", 0)),
         "Descripción": rule.get("description", "—"),
-        "IP Origen":  a.get("data", {}).get("srcip", "—"),
-        "MITRE ID":   ", ".join(ids)    if isinstance(ids, list)    else str(ids)    or "—",
-        "Táctica":    ", ".join(tactic) if isinstance(tactic, list) else str(tactic) or "—",
+        "IP Origen":   a.get("data", {}).get("srcip", "—"),
+        "MITRE ID":    ", ".join(ids)    if isinstance(ids, list)    else str(ids)    or "—",
+        "Táctica":     ", ".join(tactic) if isinstance(tactic, list) else str(tactic) or "—",
     })
 
 df = pd.DataFrame(rows)
