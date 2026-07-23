@@ -33,9 +33,43 @@ with st.sidebar:
     )
     st.caption(f"Modelo activo: `{MODELOS_DEFAULT[proveedor]}`")
     st.divider()
-    st.subheader("Alertas")
-    n_alertas    = st.selectbox("Número de alertas a analizar", [1, 3, 5, 10], index=0)
+    st.subheader("Selección de alertas")
+    modo = st.radio("Modo", ["Últimas N alertas", "Selección manual"], index=0)
     nivel_minimo = st.slider("Nivel mínimo", 1, 15, 5)
+    if modo == "Últimas N alertas":
+        n_alertas = st.selectbox("Número de alertas", [1, 3, 5, 10], index=0)
+
+# ── Carga de alertas para selección manual ────────────────────────────
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_alertas_catalogo(nivel):
+    return obtener_alertas_del_indexer(n_alertas=50, nivel_minimo=nivel)
+
+alertas_seleccionadas = []
+
+if modo == "Selección manual":
+    with st.spinner("Cargando alertas disponibles..."):
+        catalogo = cargar_alertas_catalogo(nivel_minimo)
+
+    if not catalogo:
+        st.warning(f"No hay alertas con nivel ≥ {nivel_minimo}.")
+        st.stop()
+
+    opciones = [
+        f"{a.get('timestamp','')[:19].replace('T',' ')}  |  "
+        f"{a.get('agent',{}).get('name','?')}  |  "
+        f"Nivel {a.get('rule',{}).get('level','?')}  —  "
+        f"{a.get('rule',{}).get('description','')[:60]}"
+        for a in catalogo
+    ]
+    seleccion = st.multiselect(
+        "Selecciona las alertas a analizar",
+        options=opciones,
+        default=opciones[:1],
+    )
+    alertas_seleccionadas = [catalogo[opciones.index(s)] for s in seleccion]
+
+    if not alertas_seleccionadas:
+        st.info("Selecciona al menos una alerta para continuar.")
 
 # ── Controles principales ─────────────────────────────────────────────
 col_btn, col_clear = st.columns([2, 1])
@@ -48,23 +82,28 @@ with col_clear:
 
 # ── Análisis ──────────────────────────────────────────────────────────
 if analizar:
-    with st.spinner("Obteniendo alertas del Indexer..."):
-        alertas = obtener_alertas_del_indexer(n_alertas=n_alertas, nivel_minimo=nivel_minimo)
+    if modo == "Últimas N alertas":
+        with st.spinner("Obteniendo alertas del Indexer..."):
+            alertas_a_analizar = obtener_alertas_del_indexer(
+                n_alertas=n_alertas, nivel_minimo=nivel_minimo
+            )
+    else:
+        alertas_a_analizar = alertas_seleccionadas
 
-    if not alertas:
-        st.warning(f"No se encontraron alertas con nivel ≥ {nivel_minimo}.")
+    if not alertas_a_analizar:
+        st.warning("No hay alertas para analizar.")
     else:
         resultados = []
         barra = st.progress(0, text="Iniciando análisis...")
 
-        for i, alerta in enumerate(alertas):
+        for i, alerta in enumerate(alertas_a_analizar):
             agente  = alerta.get("agent", {}).get("name", "?")
             rule_id = alerta.get("rule", {}).get("id", "?")
             barra.progress(
-                i / len(alertas),
-                text=f"Analizando {i + 1}/{len(alertas)} — Regla {rule_id} en {agente}..."
+                i / len(alertas_a_analizar),
+                text=f"Analizando {i + 1}/{len(alertas_a_analizar)} — Regla {rule_id} en {agente}..."
             )
-            with st.spinner(f"LLM procesando alerta {i + 1} de {len(alertas)}..."):
+            with st.spinner(f"LLM procesando alerta {i + 1} de {len(alertas_a_analizar)}..."):
                 informe, tiempo = analizar_alerta(alerta, proveedor=proveedor)
 
             resultados.append({

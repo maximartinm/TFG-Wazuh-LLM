@@ -66,10 +66,16 @@ st.dataframe(df, use_container_width=True, hide_index=True)
 # ── Detalle ───────────────────────────────────────────────────────────
 st.divider()
 st.subheader("Detalle de alerta")
-idx = st.number_input(
-    f"Selecciona alerta (1 – {len(alertas)})",
-    min_value=1, max_value=len(alertas), value=1, step=1
-) - 1
+
+opciones = [
+    f"{i+1}. {a.get('timestamp','')[:19].replace('T',' ')}  |  "
+    f"{a.get('agent',{}).get('name','?')}  |  "
+    f"Nivel {a.get('rule',{}).get('level','?')}  —  "
+    f"{a.get('rule',{}).get('description','')[:60]}"
+    for i, a in enumerate(alertas)
+]
+seleccion = st.selectbox("Selecciona una alerta para ver el detalle", opciones)
+idx = opciones.index(seleccion)
 
 alerta = alertas[idx]
 rule   = alerta.get("rule", {})
