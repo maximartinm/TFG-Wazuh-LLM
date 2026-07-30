@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""
+threat_hunting.py — Fase 3 del TFG
+Módulo de Threat Hunting mediante consultas en Lenguaje Natural.
+
+El analista escribe una pregunta en español, el LLM la interpreta y genera
+una query DSL de OpenSearch, que el middleware ejecuta contra el Indexer
+y muestra los resultados en formato legible.
+
+Ejemplos de consultas:
+  - "Muestra intentos de fuerza bruta SSH de las últimas 12 horas"
+  - "¿Hay escaladas de privilegios con sudo en el agente Ubuntu?"
+  - "Lista los 5 ataques más críticos de hoy"
+"""
+import os
+import json
+import re
+import requests
+import urllib3
+from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+load_dotenv()
+
+INDEXER_URL  = os.getenv('WZ_INDEXER_URL')
+INDEXER_USER = os.getenv('WZ_INDEXER_USER')
+INDEXER_PASS = os.getenv('WZ_INDEXER_PASS')
+
+
+# =====================================================================
+# PASO 1 — TRADUCCIÓN NL → DSL CON EL LLM
+# =====================================================================
+
+# Prompt de sistema para que el LLM actúe como traductor NL → OpenSearch DSL.
+# Las marcas {HOY}, {HACE_*} se sustituyen en nl_a_query_dsl() con valores reales.
+PROMPT_NL_A_DSL = """Eres un experto en OpenSearch y Wazuh. Tu única tarea es convertir preguntas en lenguaje natural a queries DSL de OpenSearch.
+
+FECHA Y HORA ACTUAL (UTC): {HOY}T{HORA_UTC}Z
+
+ESQUEMA DE ÍNDICE WAZUH (campos disponibles):
+- timestamp: fecha/hora del evento (formato ISO 8601)
+- rule.level: severidad (entero 1-15, siendo 15 el más crítico)
+- rule.id: ID de la regla Wazuh (string)
+- rule.description: descripción del evento (campo keyword; usa query_string con comodines para búsqueda de texto)
+- rule.mitre.id: código de técnica MITRE ATT&CK (ej: "T1110", "T1548.003") — usa match con el código exacto
+- rule.mitre.tactic: nombre de táctica en inglés (ej: "Credential Access", "Privilege Escalation") — usa match
+- agent.name: nombre del agente/endpoint
+- agent.id: ID del agente
+- data.srcip: IP origen del ataque
+- data.dstip: IP destino
+- data.srcuser / data.dstuser: usuarios involucrados
+- full_log: log crudo completo del sistema operativo
+
+REGLAS OBLIGATORIAS:
+1. Responde SOLO con JSON válido, sin texto adicional, sin explicaciones, sin bloques de código markdown.
+2. El JSON debe ser una query DSL de OpenSearch con estructura {"size": N, "query": {...}, "sort": [...]}
+3. Para rangos de tiempo usa SIEMPRE timestamps ISO 8601 absolutos con sufijo Z. NUNCA uses expresiones como "now/d" o "now-Xh".
+4. Referencia de timestamps ya calculados para usar en los rangos:
+   - "hoy" (desde las 00:00 UTC de hoy):  {HOY}T00:00:00Z
+   - últimas 2 horas:   {HACE_2H}Z
+   - últimas 6 horas:   {HACE_6H}Z
+   - últimas 12 horas:  {HACE_12H}Z
+   - últimas 24 horas:  {HACE_24H}Z
+   - última semana:     {HACE_7D}Z
+5. Para frases como "las últimas N horas" calcula el timestamp restando N horas a {HOY}T{HORA_UTC}Z.
+6. Limita los resultados a 10 por defecto salvo que se especifique otro número.
+7. Ordena siempre por timestamp descendente.
+8. Para buscar texto en rule.description usa query_string con comodines: {"query_string": {"query": "*término*", "fields": ["rule.description"]}}
+9. Para buscar por técnica MITRE, usa rule.mitre.id con el código exacto (ej: "T1110"), NO rule.mitre.tactic.
+
+EJEMPLOS:
+Pregunta: "intentos de fuerza bruta SSH de las últimas 2 horas"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"query_string": {"query": "*ssh*", "fields": ["rule.description"]}}, {"range": {"timestamp": {"gte": "{HACE_2H}Z"}}}, {"range": {"rule.level": {"gte": 5}}}]}}}
+
+Pregunta: "escaladas de privilegios sudo hoy"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"query_string": {"query": "*sudo*", "fields": ["rule.description"]}}, {"range": {"timestamp": {"gte": "{HOY}T00:00:00Z"}}}]}}}
+
+Pregunta: "eventos con tecnica mitre T1110"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"rule.mitre.id": "T1110"}}]}}}
+
+Pregunta: "alertas de la IP 10.0.0.1"
+Respuesta: {"size": 10, "sort": [{"timestamp": {"order": "desc"}}], "query": {"bool": {"must": [{"match": {"data.srcip": "10.0.0.1"}}]}}}
+
+Ahora convierte esta pregunta:
+{consulta_usuario}"""
+
+def extraer_primer_json(texto: str) -> str:
+    """
+    Resuelve el caso en que el modelo cierra bien el JSON pero añade
+    caracteres extra al final (una llave de más, una comilla suelta...).
+    Recorre el texto llevando un contador 'depth': cada '{' lo sube,
+    cada '}' lo baja. Cuando depth llega a 0 por primera vez, el JSON
+    está completamente cerrado — todo lo que venga después se descarta.
+    El flag 'dentro_de_string' evita contar llaves que aparecen dentro
+    de valores de texto (ej: "descripción": "usa { aquí").
+    """
+    inicio = texto.find('{')
+    if inicio == -1:
+        return texto
+    depth = 0
+    dentro_de_string = False
+    escape = False
+    for i, char in enumerate(texto[inicio:], start=inicio):
+        # El char anterior era \: este char es literal, no cuenta como estructura
+        if escape:
+            escape = False
+            continue
+        # \ dentro de un string activa el flag de escape para el siguiente char
+        if char == '\\' and dentro_de_string:
+            escape = True
+            continue
+        # Las comillas abren y cierran el modo string
+        if char == '"':
+            dentro_de_string = not dentro_de_string
+            continue
+        # Dentro de un string las llaves son texto, no estructura JSON
+        if dentro_de_string:
+            continue
+        if char == '{':
+            depth += 1          # abrimos un nivel de objeto
+        elif char == '}':
+            depth -= 1
+            if depth == 0:      # JSON completamente cerrado: devolvemos solo hasta aquí
+                return texto[inicio:i + 1]
+    return texto[inicio:]
+
+
+def reparar_json_truncado(texto: str) -> str:
+    """
+    Resuelve el caso opuesto: el modelo se queda sin tokens y entrega
+    un JSON cortado al que le faltan cierres (ej: '{"query": {"bool": [').
+    Usa una pila ('cierres'): cada '{' apila el '}' esperado, cada '['
+    apila el ']' esperado. Cuando encuentra un cierre real que coincide
+    con el tope de la pila, lo saca (está correctamente cerrado). Al
+    terminar el recorrido, lo que quede en la pila son los cierres que
+    faltan; se añaden al final en orden inverso.
+    El flag 'dentro_de_string' evita contar llaves dentro de valores de texto.
+    """
+    cierres = []  # pila de cierres pendientes
+    dentro_de_string = False
+    escape = False
+
+    for char in texto:
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"' and not escape:
+            dentro_de_string = not dentro_de_string
+            continue
+        if dentro_de_string:
+            continue
+        if char == '{':
+            cierres.append('}')   # apilamos el cierre que se esperará
+        elif char == '[':
+            cierres.append(']')
+        elif char in ('}', ']'):
+            if cierres and cierres[-1] == char:
+                cierres.pop()     # cierre real encontrado → cancela el pendiente
+
+    # Los cierres que quedaron en la pila son los que faltan
+    return texto + ''.join(reversed(cierres))
+
+def nl_a_query_dsl(consulta: str, ollama_url: str, modelo: str) -> dict | None:
+    """
+    Usa el LLM para traducir una consulta en lenguaje natural a DSL de OpenSearch.
+
+    Args:
+        consulta:    Pregunta del analista en texto libre.
+        ollama_url:  URL del servidor Ollama.
+        modelo:      Nombre del modelo a usar.
+
+    Returns:
+        Dict con la query DSL, o None si la traducción falla.
+    """
+    ahora = datetime.now(timezone.utc)
+    tokens = {
+        "{consulta_usuario}": consulta,
+        "{HOY}":      ahora.strftime("%Y-%m-%d"),
+        "{HORA_UTC}": ahora.strftime("%H:%M:%S"),
+        "{HACE_2H}":  (ahora - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "{HACE_6H}":  (ahora - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "{HACE_12H}": (ahora - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "{HACE_24H}": (ahora - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "{HACE_7D}":  (ahora - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    prompt = PROMPT_NL_A_DSL
+    for token, value in tokens.items():
+        prompt = prompt.replace(token, value)
+
+    try:
+        payload = {"model": modelo, "prompt": prompt, "stream": False}
+        response = requests.post(ollama_url, json=payload, timeout=60)
+        raw = response.json().get("response", "").strip()
+
+        # Limpiar bloques markdown que el modelo incluye a veces
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+        # Extraer el primer JSON completo (elimina } extra o caracteres sueltos al final)
+        raw = extraer_primer_json(raw)
+        # Reparar JSON truncado si faltan cierres
+        raw = reparar_json_truncado(raw)
+
+        query_dsl = json.loads(raw)
+        return query_dsl
+
+    except json.JSONDecodeError:
+        print(f"[-] El LLM no devolvió JSON válido. Respuesta recibida:\n{raw[:300]}")
+        return None
+    except Exception as e:
+        print(f"[-] Error traduciendo consulta: {e}")
+        return None
+
+
+
+# =====================================================================
+# PASO 2 — EJECUCIÓN DE LA QUERY EN OPENSEARCH
+# =====================================================================
+
+class QueryError(RuntimeError):
+    """El Indexer devolvió un error HTTP o no fue alcanzable."""
+
+
+def ejecutar_query(query_dsl: dict) -> list[dict]:
+    """
+    Ejecuta la query DSL contra el Indexer de Wazuh y devuelve los resultados.
+
+    Returns:
+        Lista de dicts con los _source de cada alerta encontrada.
+
+    Raises:
+        QueryError: si el Indexer devuelve un status != 200 o no es alcanzable.
+    """
+    try:
+        response = requests.post(
+            INDEXER_URL,
+            auth=(INDEXER_USER, INDEXER_PASS),
+            json=query_dsl,
+            verify=False,
+            timeout=15
+        )
+        if response.status_code == 200:
+            hits = response.json().get('hits', {}).get('hits', [])
+            return [h['_source'] for h in hits]
+        else:
+            raise QueryError(
+                f"El Indexer devolvió status {response.status_code}. "
+                f"Detalle: {response.text[:300]}"
+            )
+    except QueryError:
+        raise
+    except Exception as e:
+        raise QueryError(f"Error de conexión con el Indexer: {e}")
+
+
+# =====================================================================
+# PASO 3 — FORMATEO DE RESULTADOS
+# =====================================================================
+
+def formatear_resultados(alertas: list[dict], consulta_original: str) -> str:
+    """
+    Convierte la lista de alertas en un resumen legible para el analista.
+    No enviamos TODO al LLM para evitar context overflow en modelos locales.
+    """
+    if not alertas:
+        return f"[~] No se encontraron eventos para: '{consulta_original}'"
+
+    lineas = [
+        f"\n{'='*70}",
+        f"  RESULTADOS para: '{consulta_original}'",
+        f"  {len(alertas)} evento(s) encontrado(s)",
+        f"{'='*70}"
+    ]
+
+    for i, alerta in enumerate(alertas, start=1):
+        ts          = alerta.get("timestamp", "N/A")
+        nivel       = alerta.get("rule", {}).get("level", "?")
+        descripcion = alerta.get("rule", {}).get("description", "Sin descripción")
+        agente      = alerta.get("agent", {}).get("name", "Desconocido")
+        src_ip      = alerta.get("data", {}).get("srcip", "-")
+        mitre_ids   = alerta.get("rule", {}).get("mitre", {}).get("id", [])
+        mitre_str   = ", ".join(mitre_ids) if isinstance(mitre_ids, list) else str(mitre_ids)
+
+        lineas.append(f"\n  [{i}] {ts}")
+        lineas.append(f"      Agente  : {agente}")
+        lineas.append(f"      Nivel   : {nivel}  |  Descripción: {descripcion}")
+        lineas.append(f"      Origen  : {src_ip}")
+        if mitre_str and mitre_str != "[]":
+            lineas.append(f"      MITRE   : {mitre_str}")
+
+    lineas.append(f"\n{'='*70}")
+    return "\n".join(lineas)
+
+
+# =====================================================================
+# BUCLE INTERACTIVO PRINCIPAL
+# =====================================================================
+
+def iniciar_modo_hunting():
+    """
+    Bucle de threat hunting en lenguaje natural.
+    Integra los tres pasos: NL → DSL → Ejecución → Resultados.
+    """
+    ollama_url = os.getenv("WZ_OLLAMA_URL")
+    modelo     = os.getenv("WZ_MODELO", "llama3.2")
+
+    print("\n" + "="*70)
+    print("  THREAT HUNTING — Modo Consultas en Lenguaje Natural")
+    print("  Wazuh Indexer + LLM Local (Ollama)")
+    print("="*70)
+    print("\nEjemplos de consultas:")
+    print("  → 'intentos de brute force SSH de las últimas 6 horas'")
+    print("  → 'escaladas de privilegios con sudo hoy'")
+    print("  → 'alertas críticas nivel 10 o superior esta semana'")
+    print("  → 'actividad de Mimikatz en agentes Windows'")
+    print("\nComandos especiales:")
+    print("  → 'historial'  Ver consultas realizadas en esta sesión")
+    print("  → 'salir'      Terminar el modo hunting")
+    print()
+
+    historial = []
+
+    while True:
+        try:
+            consulta = input("🔍 [HUNTING] > ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\n[~] Sesión de Threat Hunting finalizada.")
+            break
+
+        if not consulta:
+            continue
+        if consulta.lower() in ('salir', 'exit', 'quit', 'q'):
+            print("[~] Saliendo del modo Threat Hunting.")
+            break
+
+        # Comandos especiales
+        if consulta.lower() == 'historial':
+            if historial:
+                print("\nConsultas anteriores:")
+                for i, h in enumerate(historial, 1):
+                    print(f"  {i}. {h}")
+            else:
+                print("[~] Sin historial todavía.")
+            continue
+
+        print(f"[~] Traduciendo consulta al lenguaje de OpenSearch...")
+
+        # Paso 1: NL → DSL
+        query_dsl = nl_a_query_dsl(consulta, ollama_url, modelo)
+        if not query_dsl:
+            print("[-] No se pudo generar una query válida. Intenta reformular la pregunta.")
+            continue
+
+        # Mostrar la query generada al analista para transparencia
+        print(f"[~] Query DSL generada:")
+        # Imprimir el JSON de manera legible
+        print(f"    {json.dumps(query_dsl, ensure_ascii=False)}")
+
+        # Paso 2: Ejecutar query
+        print("[~] Consultando el Indexer de Wazuh...")
+        try:
+            resultados = ejecutar_query(query_dsl)
+        except QueryError as e:
+            print(f"[-] {e}")
+            continue
+
+        # Paso 3: Mostrar resultados
+        salida = formatear_resultados(resultados, consulta)
+        print(salida)
+
+        historial.append(consulta)
+
+
+if __name__ == "__main__":
+    iniciar_modo_hunting()
