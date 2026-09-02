@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wazuh-llm
+  annotations:
+    # CRÍTICO: _consultar_ollama tiene un timeout de 180s (middleware.py:160).
+    # El valor por defecto de nginx (60s) cortaría el websocket a mitad del
+    # análisis y el usuario vería un resultado en blanco SIN mensaje de error.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+
+    # La aplicación NO tiene autenticación: quien alcance este Ingress puede
+    # lanzar la respuesta activa (bloqueo de IPs, pages/2_Analisis_LLM.py:199).
+    # Para protegerla con basic auth, descomenta lo siguiente y crea el Secret:
+    #   htpasswd -c auth analista
+    #   kubectl create secret generic wazuh-llm-basic-auth \
+    #       --from-file=auth -n wazuh-llm
+    #
+    # nginx.ingress.kubernetes.io/auth-type: basic
+    # nginx.ingress.kubernetes.io/auth-secret: wazuh-llm-basic-auth
+    # nginx.ingress.kubernetes.io/auth-realm: "Wazuh + LLM — acceso restringido"
+spec:
+  ingressClassName: nginx
+  rules:
+    # localtest.me resuelve siempre a 127.0.0.1: no hay que tocar /etc/hosts.
+    # Con podman rootless el acceso real es por el puerto 8080 del host
+    # (ver extraPortMappings en kind-cluster.yaml):
+    #     http://wazuh-llm.localtest.me:8080
+    - host: wazuh-llm.localtest.me
+      http:
+        paths:
+          # Se sirve en la raíz a propósito. Un subpath obligaría a usar
+          # --server.baseUrlPath y complica las rutas de los assets estáticos.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wazuh-llm
+                port:
+                  name: http

@@ -1,0 +1,72 @@
+# =====================================================================
+# Control compensatorio de que todas las llamadas a Wazuh usan verify=False
+# (certificados autofirmados): el TLS no autentica al peer, así que quien
+# restringe con quién habla la aplicación es esta política.
+#
+# AVISO: kindnet, el CNI por defecto de kind, NO implementa NetworkPolicy.
+# Este manifiesto se aplica sin error pero es un NO-OP en un kind estándar.
+# Para que filtre de verdad: crear el cluster con disableDefaultCNI: true
+# (ver kind-cluster.yaml) e instalar Calico. Se entrega porque documenta la
+# postura de seguridad prevista y funciona tal cual en un cluster real.
+#
+# >>> EDITA AQUÍ <<< la IP del host debe coincidir con externals.yaml.
+# =====================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wazuh-llm
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh-llm
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Solo el controlador de ingress puede llegar al dashboard.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8501
+
+  egress:
+    # DNS del cluster.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Wazuh y Ollama en el host.
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.69/32
+      ports:
+        - protocol: TCP
+          port: 55000   # API de gestión
+        - protocol: TCP
+          port: 9200    # Indexer
+        - protocol: TCP
+          port: 11434   # Ollama
+
+    # Salida a Internet para Gemini y Groq. Elimina este bloque entero si solo
+    # se usa el proveedor local (ollama). Se excluyen los rangos privados para
+    # que esta regla no reabra el acceso a la LAN.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

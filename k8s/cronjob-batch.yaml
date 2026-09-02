@@ -1,0 +1,80 @@
+# =====================================================================
+# Triaje programado por lotes usando la misma imagen.
+#
+# La CLI es interactiva SOLO si falta --proveedor (menú de selección) o si se
+# pasa --respuesta-activa (confirmación humana). Con --proveedor y sin
+# --respuesta-activa es totalmente no interactiva, así que este CronJob
+# funciona sin ningún cambio en el código.
+#
+# Se entrega SUSPENDIDO para que no se ejecute por sorpresa (consume cuota de
+# la API de Groq). Para activarlo:
+#     kubectl patch cronjob wazuh-llm-batch -n wazuh-llm \
+#         -p '{"spec":{"suspend":false}}'
+#
+# El informe se escribe en los logs del pod:
+#     kubectl logs -n wazuh-llm -l app.kubernetes.io/component=batch
+# =====================================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: wazuh-llm-batch
+  labels:
+    app.kubernetes.io/name: wazuh-llm
+    app.kubernetes.io/component: batch
+spec:
+  suspend: true
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Sin reintentos: si falla, el siguiente tick vuelve a analizar las
+      # alertas más recientes de todos modos.
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: wazuh-llm
+            app.kubernetes.io/component: batch
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: wazuh-ia
+              # Prefijo localhost/ obligatorio con podman (ver deployment.yaml)
+              image: localhost/wazuh-llm:0.1.0
+              imagePullPolicy: IfNotPresent
+              command:
+                - wazuh-ia
+                - --proveedor=groq
+                - --alertas=5
+                - --nivel=10
+              envFrom:
+                - configMapRef:
+                    name: wazuh-llm-config
+                - secretRef:
+                    name: wazuh-llm-secrets
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}

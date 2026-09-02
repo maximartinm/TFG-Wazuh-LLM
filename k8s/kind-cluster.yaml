@@ -1,0 +1,46 @@
+# Cluster kind de un solo nodo sobre PODMAN, preparado para ingress-nginx.
+#
+#   export KIND_EXPERIMENTAL_PROVIDER=podman
+#   kind create cluster --config k8s/kind-cluster.yaml
+#
+# La etiqueta ingress-ready y los extraPortMappings son lo que permite que
+# ingress-nginx se programe en el nodo y que los puertos del host lleguen al
+# controlador.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: wazuh-llm
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # 8080/8443 en lugar de 80/443 a propósito: podman corre en modo
+      # ROOTLESS en esta máquina (`podman info` -> Rootless: true) y no puede
+      # publicar puertos privilegiados (<1024).
+      #
+      # La aplicación queda en  http://wazuh-llm.localtest.me:8080
+      #
+      # Si prefieres los puertos estándar, hay que pasar la máquina a rootful:
+      #   podman machine stop
+      #   podman machine set --rootful
+      #   podman machine start
+      # y entonces cambiar hostPort a 80 y 443 aquí.
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP
+
+# NOTA sobre NetworkPolicy:
+# kindnet (el CNI por defecto) NO implementa NetworkPolicy — networkpolicy.yaml
+# se aplicará sin error pero no filtrará nada. Para que surta efecto hay que
+# descomentar lo siguiente y después instalar Calico:
+#
+# networking:
+#   disableDefaultCNI: true
+#   podSubnet: "192.168.0.0/16"

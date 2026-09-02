@@ -4,3 +4,4 @@ __pycache__/
 .env
 build/
 .DS_Store
+k8s/.env.k8s

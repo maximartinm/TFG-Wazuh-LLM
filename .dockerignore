@@ -1,0 +1,22 @@
+# Credenciales — NUNCA deben entrar en la imagen
+.env
+.env.*
+k8s/.env.k8s
+
+# Entornos y artefactos de build locales
+venv/
+.venv/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+
+# No se necesitan en runtime
+.git/
+.gitignore
+tests/
+k8s/
+plan-k8s.txt
+LICENSE
+.DS_Store

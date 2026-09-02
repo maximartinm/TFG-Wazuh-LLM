@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-llm
+  labels:
+    app.kubernetes.io/name: wazuh-llm
+    app.kubernetes.io/component: dashboard
+spec:
+  # 1 sola réplica: st.session_state (pages/2 y pages/3) vive en memoria del
+  # proceso y está ligado al websocket. Escalar exigiría sticky sessions.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wazuh-llm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wazuh-llm
+        app.kubernetes.io/component: dashboard
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: streamlit
+          # El prefijo localhost/ NO es opcional: podman nombra las imágenes
+          # locales como localhost/<nombre>, y eso es lo que viaja dentro del
+          # archive que carga kind. Sin el prefijo, containerd normalizaría a
+          # docker.io/library/wazuh-llm:0.1.0 e intentaría bajarla de Docker
+          # Hub -> ErrImagePull.
+          image: localhost/wazuh-llm:0.1.0
+          # Obligatorio: la imagen se inyecta en el nodo con
+          # `podman save` + `kind load image-archive`, no hay registry.
+          # Con Always el pod quedaría en ErrImagePull.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8501
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: wazuh-llm-config
+            - secretRef:
+                name: wazuh-llm-secrets
+
+          # /_stcore/health es el endpoint propio de Streamlit (>= 1.30).
+          startupProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # failureThreshold alto a propósito: durante una inferencia de hasta
+          # 180s (middleware.py:160) el proceso está ocupado y Streamlit sirve
+          # el health en el mismo event loop. Un liveness agresivo mataría el
+          # pod en mitad de un análisis.
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 8
+
+          # La app es I/O-bound: espera a Wazuh y al LLM, no calcula.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Viable porque el código solo LEE de disco (prompts/mitre_prompt.txt
+            # en middleware.py:262); no escribe nada.
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          volumeMounts:
+            # Único punto de escritura. HOME=/tmp en el Dockerfile, así que
+            # aquí acaban los ficheros temporales de Streamlit.
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

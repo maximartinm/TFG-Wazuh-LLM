@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: wazuh-llm
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - externals.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+  - cronjob-batch.yaml
+
+# El Secret se genera a partir de k8s/.env.k8s (ignorado por git), así que
+# ninguna credencial se versiona. kustomize le añade un sufijo hash al nombre
+# y reescribe la referencia en envFrom: al cambiar una contraseña, el
+# Deployment hace rollout automáticamente.
+secretGenerator:
+  - name: wazuh-llm-secrets
+    envs:
+      - .env.k8s
+
+# El ConfigMap sí es un recurso plano (legible y versionado). Contrapartida:
+# al modificarlo hay que forzar el rollout a mano.
+generatorOptions:
+  disableNameSuffixHash: false
+
+# Deliberadamente NO se usa `commonLabels`/`labels` con includeSelectors: el
+# transformador inyecta la etiqueta también en spec.selector de los Services,
+# y eso rompería los Services sin selector de externals.yaml (dejarían de
+# emparejar con sus EndpointSlice manuales).
+
+images:
+  - name: localhost/wazuh-llm
+    newTag: 0.1.0

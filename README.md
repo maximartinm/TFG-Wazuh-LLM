@@ -165,7 +165,7 @@ Páginas disponibles:
 | Google AI | Gemini Flash | API externa |
 | Groq | Llama 3.3-70B | API externa, alta velocidad |
 
-El proveedor se selecciona en la interfaz web o mediante las variables de entorno `WZ_OLLAMA_URL` / `WZ_GEMINI_KEY` / `WZ_GROQ_KEY`.
+El proveedor se selecciona en la interfaz web o mediante las variables de entorno `WZ_OLLAMA_URL` / `GEMINI_API_KEY` / `GROQ_API_KEY`.
 
 ---
 
@@ -210,8 +210,8 @@ WZ_OLLAMA_URL=http://localhost:11434/api/generate
 WZ_MODELO=llama3.2
 
 # Proveedores externos (opcional)
-WZ_GEMINI_KEY=tu_clave_gemini
-WZ_GROQ_KEY=tu_clave_groq
+GEMINI_API_KEY=tu_clave_gemini
+GROQ_API_KEY=tu_clave_groq
 
 # Ruta al archivo de prompt
 WZ_PROMPT_PATH=prompts/mitre_prompt.txt
@@ -252,6 +252,55 @@ sudo systemctl enable --now wazuh-agent
 
 ---
 
+## Despliegue en Kubernetes
+
+Además de la ejecución local, el proyecto se puede desplegar en un clúster de
+Kubernetes. Los manifiestos están en [`k8s/`](k8s/) y el runbook completo en
+[`k8s/README.md`](k8s/README.md).
+
+El despliegue cubre el dashboard Streamlit como `Deployment`. **Wazuh y Ollama
+se mantienen fuera del clúster**: el nodo corre dentro de la VM de podman en
+macOS y un pod no puede acceder a la GPU Metal de Apple Silicon, así que meter
+Ollama dentro implicaría inferencia solo-CPU. Se alcanzan mediante `Service`
+sin selector con `EndpointSlice` manuales apuntando a la IP LAN del host.
+
+```bash
+export KIND_EXPERIMENTAL_PROVIDER=podman
+kind create cluster --config k8s/kind-cluster.yaml
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=240s
+
+podman build -t localhost/wazuh-llm:0.1.0 .
+podman save localhost/wazuh-llm:0.1.0 -o /tmp/wazuh-llm.tar
+kind load image-archive /tmp/wazuh-llm.tar --name wazuh-llm
+
+cp k8s/.env.k8s.example k8s/.env.k8s    # credenciales; ignorado por git
+kubectl apply -k k8s/
+```
+
+Dashboard en **<http://wazuh-llm.localtest.me:8080>**.
+
+La CLI interactiva no se despliega como workload; se ejecuta contra el pod:
+
+```bash
+kubectl exec -it -n wazuh-llm deploy/wazuh-llm -- wazuh-ia --proveedor ollama --alertas 3
+```
+
+Detalles que conviene conocer antes de desplegar:
+
+| Aspecto | Decisión |
+|---|---|
+| Réplicas | 1 — `st.session_state` vive en memoria del proceso |
+| Puertos | 8080/8443 — podman rootless no publica puertos privilegiados |
+| Nombre de imagen | `localhost/wazuh-llm` — es el prefijo que escribe `podman save` |
+| Timeout del Ingress | 300 s — la inferencia de Ollama puede tardar hasta 180 s |
+| NetworkPolicy | Incluida, pero es un *no-op* en kind: kindnet no la implementa |
+| Autenticación | Ninguna; basic auth queda preparado y comentado en `ingress.yaml` |
+
+---
+
 ## Vectores de ataque evaluados
 
 | Ataque | Regla Wazuh | MITRE | Agente |
@@ -271,6 +320,7 @@ sudo systemctl enable --now wazuh-agent
 - [x] Respuesta activa con confirmación human-in-the-loop
 - [x] Threat hunting mediante consultas en lenguaje natural
 - [x] Interfaz web con soporte multi-modelo (Ollama / Gemini / Groq)
+- [x] Despliegue en Kubernetes (kind sobre podman) con manifiestos versionados
 
 ---
 
@@ -293,6 +343,17 @@ TFG-Wazuh-LLM/
 ├── Home.py                    # Dashboard principal (Streamlit)
 ├── tests/
 │   └── test_middleware.py      # Tests unitarios (pytest)
+├── k8s/                       # Despliegue en Kubernetes
+│   ├── kind-cluster.yaml      # Clúster kind sobre podman
+│   ├── deployment.yaml        # Dashboard Streamlit
+│   ├── externals.yaml         # Wazuh y Ollama fuera del clúster
+│   ├── ingress.yaml           # nginx + timeouts para la inferencia
+│   ├── networkpolicy.yaml     # default-deny egress + allowlist
+│   ├── cronjob-batch.yaml     # Triaje programado (suspendido)
+│   ├── kustomization.yaml     # Genera el Secret desde .env.k8s
+│   └── README.md              # Runbook de despliegue
+├── Dockerfile                 # Imagen del middleware
+├── .dockerignore
 ├── .env.example               # Plantilla de configuración
 ├── .gitignore
 ├── pyproject.toml

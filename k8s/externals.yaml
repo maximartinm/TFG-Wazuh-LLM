@@ -1,0 +1,115 @@
+# =====================================================================
+# Servicios externos al cluster: Wazuh (manager + indexer) y Ollama.
+#
+# Son Services SIN selector: Kubernetes no les asigna endpoints
+# automáticamente, así que se les asocia un EndpointSlice manual apuntando
+# a la IP LAN del host. Con esto la aplicación usa nombres DNS estables y la
+# IP aparece en un único fichero.
+#
+# >>> EDITA AQUÍ <<<  IP LAN del host (actualmente 192.168.1.69).
+#     En macOS la interfaz activa puede ser en0 (Ethernet) o en1 (Wi-Fi):
+#         ipconfig getifaddr en1 || ipconfig getifaddr en0
+#     Ojo: es una IP DHCP y puede cambiar al reconectar a la red.
+#
+# NO uses 127.0.0.1: dentro de un pod se refiere al propio pod.
+#
+# Requisito en el host: Ollama escucha solo en 127.0.0.1 por defecto y no
+# sería alcanzable desde el cluster. Exponerlo antes de desplegar:
+#     launchctl setenv OLLAMA_HOST 0.0.0.0 && brew services restart ollama
+# =====================================================================
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-manager
+  labels:
+    app.kubernetes.io/name: wazuh-manager
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 55000
+      targetPort: 55000
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wazuh-manager-external
+  labels:
+    kubernetes.io/service-name: wazuh-manager
+addressType: IPv4
+ports:
+  - name: api
+    port: 55000
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "192.168.1.69"
+    conditions:
+      ready: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-indexer
+  labels:
+    app.kubernetes.io/name: wazuh-indexer
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wazuh-indexer-external
+  labels:
+    kubernetes.io/service-name: wazuh-indexer
+addressType: IPv4
+ports:
+  - name: http
+    port: 9200
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "192.168.1.69"
+    conditions:
+      ready: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  labels:
+    app.kubernetes.io/name: ollama
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ollama-external
+  labels:
+    kubernetes.io/service-name: ollama
+addressType: IPv4
+ports:
+  - name: http
+    port: 11434
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "192.168.1.69"
+    conditions:
+      ready: true

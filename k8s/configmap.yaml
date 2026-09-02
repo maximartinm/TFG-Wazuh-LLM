@@ -1,0 +1,31 @@
+# Configuración NO sensible. Las credenciales van en el Secret generado por
+# kustomize desde k8s/.env.k8s.
+#
+# Este ConfigMap no lleva sufijo hash, así que al modificarlo hay que forzar
+# el rollout:  kubectl rollout restart deploy/wazuh-llm -n wazuh-llm
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-llm-config
+data:
+  # --- Plano de gestión (API Manager) ---
+  # Resuelve al Service sin selector definido en externals.yaml.
+  WZ_API_URL: "https://wazuh-manager.wazuh-llm.svc.cluster.local:55000"
+  WZ_API_USER: "wazuh-wui"
+
+  # --- Plano de datos (Indexer / OpenSearch) ---
+  WZ_INDEXER_URL: "https://wazuh-indexer.wazuh-llm.svc.cluster.local:9200/wazuh-alerts-*/_search"
+  WZ_INDEXER_USER: "admin"
+
+  # IP real del Manager. Alimenta LISTA_BLANCA_IPS del guardrail
+  # (middleware.py:34), que impide que el LLM proponga bloquear el propio
+  # manager. Debe ser la IP del host, no el nombre del Service.
+  # >>> EDITA AQUÍ <<< (mismo valor que en externals.yaml)
+  WZ_MANAGER_IP: "192.168.1.69"
+
+  # --- IA local ---
+  WZ_OLLAMA_URL: "http://ollama.wazuh-llm.svc.cluster.local:11434/api/generate"
+  WZ_MODELO: "llama3.2"
+
+  # Ruta ABSOLUTA: el valor por defecto del código es relativo al cwd.
+  WZ_PROMPT_PATH: "/app/prompts/mitre_prompt.txt"
